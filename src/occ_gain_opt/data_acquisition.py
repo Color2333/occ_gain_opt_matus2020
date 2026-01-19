@@ -1,0 +1,204 @@
+"""
+数据采集模块
+模拟相机图像采集和ROI灰度值提取
+"""
+
+from typing import Tuple, Optional
+
+import cv2
+import numpy as np
+
+from .config import CameraConfig, LEDConfig, ROIStrategy, ExperimentConfig
+
+
+class DataAcquisition:
+    """数据采集类 - 模拟相机图像采集"""
+
+    def __init__(self, width: int = CameraConfig.IMAGE_WIDTH,
+                 height: int = CameraConfig.IMAGE_HEIGHT):
+        """
+        初始化数据采集模块
+
+        Args:
+            width: 图像宽度
+            height: 图像高度
+        """
+        self.width = width
+        self.height = height
+        self.roi_mask = None
+
+    def capture_image(self, led_intensity: float, gain: float,
+                      background_light: float = 50,
+                      noise_std: float = ExperimentConfig.NOISE_STD) -> np.ndarray:
+        """
+        模拟捕获图像
+
+        Args:
+            led_intensity: LED强度 (0-255)
+            gain: 相机增益 (dB)
+            background_light: 背景光强 (0-255)
+            noise_std: 噪声标准差
+
+        Returns:
+            捕获的图像 (灰度图)
+        """
+        image = np.full((self.height, self.width), background_light, dtype=np.float32)
+
+        # LED区域 (中心圆形区域)
+        center_x, center_y = self.width // 2, self.height // 2
+        radius = 50
+        y, x = np.ogrid[:self.height, :self.width]
+        mask = (x - center_x) ** 2 + (y - center_y) ** 2 <= radius ** 2
+
+        # 增益从dB到线性尺度
+        gain_linear = 10 ** (gain / 20.0)
+
+        # LED信号: 保持线性关系,避免立即饱和
+        led_base_signal = (led_intensity / 255.0) * 40.0
+        led_signal = led_base_signal * gain_linear
+
+        image[mask] = background_light + led_signal
+
+        # 添加高斯噪声
+        if noise_std > 0:
+            noise = np.random.normal(0, noise_std, image.shape)
+            image = image + noise
+
+        image = np.clip(image, 0, 255)
+        return image.astype(np.uint8)
+
+    def select_roi(self, strategy: str = ROIStrategy.CENTER,
+                   manual_coords: Optional[Tuple[int, int, int, int]] = None,
+                   image: Optional[np.ndarray] = None) -> np.ndarray:
+        """
+        选择ROI区域
+
+        Args:
+            strategy: ROI选择策略
+            manual_coords: 手动坐标 (x, y, w, h)
+            image: 用于自动选择的图像
+
+        Returns:
+            ROI掩码
+        """
+        if strategy == ROIStrategy.CENTER:
+            roi_width, roi_height = 100, 100
+            x = (self.width - roi_width) // 2
+            y = (self.height - roi_height) // 2
+            self.roi_mask = np.zeros((self.height, self.width), dtype=np.uint8)
+            self.roi_mask[y:y + roi_height, x:x + roi_width] = 1
+
+        elif strategy == ROIStrategy.MANUAL and manual_coords:
+            x, y, w, h = manual_coords
+            self.roi_mask = np.zeros((self.height, self.width), dtype=np.uint8)
+            self.roi_mask[y:y + h, x:x + w] = 1
+
+        elif strategy == ROIStrategy.AUTO_BRIGHTNESS and image is not None:
+            _, threshold = cv2.threshold(image, 200, 255, cv2.THRESH_BINARY)
+            contours, _ = cv2.findContours(threshold, cv2.RETR_EXTERNAL,
+                                           cv2.CHAIN_APPROX_SIMPLE)
+
+            if contours:
+                max_contour = max(contours, key=cv2.contourArea)
+                x, y, w, h = cv2.boundingRect(max_contour)
+                padding = 10
+                x = max(0, x - padding)
+                y = max(0, y - padding)
+                w = min(self.width - x, w + 2 * padding)
+                h = min(self.height - y, h + 2 * padding)
+
+                self.roi_mask = np.zeros((self.height, self.width), dtype=np.uint8)
+                self.roi_mask[y:y + h, x:x + w] = 1
+            else:
+                return self.select_roi(ROIStrategy.CENTER)
+        else:
+            return self.select_roi(ROIStrategy.CENTER)
+
+        return self.roi_mask
+
+    def extract_roi_gray_values(self, image: np.ndarray,
+                                roi_mask: Optional[np.ndarray] = None) -> Tuple[float, np.ndarray]:
+        """
+        提取ROI区域的灰度值
+
+        Args:
+            image: 输入图像
+            roi_mask: ROI掩码
+
+        Returns:
+            (平均灰度值, ROI区域的像素值)
+        """
+        if roi_mask is None:
+            roi_mask = self.roi_mask
+
+        if roi_mask is None:
+            gray_values = image.flatten()
+        else:
+            gray_values = image[roi_mask == 1]
+
+        mean_gray = np.mean(gray_values)
+        return mean_gray, gray_values
+
+    def get_roi_statistics(self, image: np.ndarray,
+                           roi_mask: Optional[np.ndarray] = None) -> dict:
+        """
+        获取ROI区域的统计信息
+
+        Args:
+            image: 输入图像
+            roi_mask: ROI掩码
+
+        Returns:
+            包含统计信息的字典
+        """
+        mean_gray, gray_values = self.extract_roi_gray_values(image, roi_mask)
+
+        stats = {
+            'mean': mean_gray,
+            'std': np.std(gray_values),
+            'min': np.min(gray_values),
+            'max': np.max(gray_values),
+            'median': np.median(gray_values),
+            'percentile_25': np.percentile(gray_values, 25),
+            'percentile_75': np.percentile(gray_values, 75),
+            'num_pixels': len(gray_values),
+            'saturated_ratio': np.sum(gray_values >= 255) / len(gray_values)
+        }
+
+        return stats
+
+    def simulate_capture_sequence(self, led_duty_cycle: float,
+                                  gains: np.ndarray,
+                                  background_light: float = 50,
+                                  noise_std: float = ExperimentConfig.NOISE_STD,
+                                  roi_strategy: str = ROIStrategy.CENTER) -> list:
+        """
+        模拟一系列不同增益下的图像捕获
+
+        Args:
+            led_duty_cycle: LED占空比 (0-100)
+            gains: 增益值数组
+            background_light: 背景光强
+            noise_std: 噪声标准差
+            roi_strategy: ROI选择策略
+
+        Returns:
+            图像和统计信息列表
+        """
+        led_intensity = (led_duty_cycle / 100.0) * 255
+
+        results = []
+        for gain in gains:
+            image = self.capture_image(
+                led_intensity, gain, background_light, noise_std=noise_std
+            )
+            roi_mask = self.select_roi(strategy=roi_strategy, image=image)
+            stats = self.get_roi_statistics(image, roi_mask)
+
+            results.append({
+                'gain': gain,
+                'image': image,
+                'stats': stats
+            })
+
+        return results
