@@ -1,0 +1,2 @@
+[console_scripts]
+occ-gain-opt = occ_gain_opt.cli:main

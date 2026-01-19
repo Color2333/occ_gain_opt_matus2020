@@ -1,0 +1,86 @@
+# 光相机通信模拟增益优化算法复现
+
+## 论文信息
+- **标题**: Experimental Evaluation of an Analog Gain Optimization Algorithm in Optical Camera Communications
+- **作者**: Matus, 等人
+- **年份**: 2020
+
+## 研究概述
+本研究提出了一种在光相机通信(OCC)系统中优化相机模拟增益设置的算法。OCC系统利用LED作为发射器,相机作为接收器进行无线通信。
+
+### 核心问题
+- **欠饱和/欠曝光**: 图像太暗,难以从背景中区分ROI
+- **过饱和**: 图像太亮,达到255的最大强度
+
+### 解决方案
+开发一种自动控制算法,为相机选择最佳模拟增益值,使ROI的灰度值尽可能接近255(饱和点),但不超过它。
+
+## 算法核心
+
+### 1. 数据采集 (Data Acquisition)
+- 设置LED发射强度和初始相机增益
+- 选择ROI (感兴趣区域)
+- 提取ROI的灰度值
+
+### 2. 增益优化 (Gain Optimization)
+**目标**: 找到最优增益 \( G_{opt} \),使ROI的灰度值最接近255但不超过它
+
+**算法**:
+1. 测量ROI的平均灰度值 \( \bar{Y} \)
+2. 计算最优增益: \( G_{opt} = G_{curr} \times \frac{255}{\bar{Y}} \)
+3. 应用约束: \( G_{min} \leq G_{opt} \leq G_{max} \)
+4. 更新相机增益并重新测量
+5. 迭代优化直到收敛
+
+### 3. 性能评估 (Performance Evaluation)
+使用均方误差(MSE)评估图像质量:
+
+\[
+MSE = \frac{1}{MN} \sum_{i=1}^{M} \sum_{j=1}^{N} [I(i,j) - \hat{I}(i,j)]^2
+\]
+
+其中:
+- \( I(i,j) \): 原始图像像素值
+- \( \hat{I}(i,j) \): 去噪后的像素值
+- M, N: 图像尺寸
+
+## 项目结构
+```
+kg/
+├── pyproject.toml                     # 标准包配置
+├── src/occ_gain_opt/                  # 主包代码
+│   ├── __init__.py
+│   ├── cli.py                         # 命令行入口
+│   ├── config.py                      # 配置参数
+│   ├── data_acquisition.py            # 数据采集模块
+│   ├── gain_optimization.py           # 增益优化算法
+│   ├── performance_evaluation.py      # 性能评估模块
+│   ├── simulation.py                  # 仿真实验
+│   ├── visualization.py               # 可视化工具
+│   ├── examples.py                    # 使用示例
+│   └── tools/                         # 辅助分析/可视化脚本
+├── docs/                               # 文档
+├── README.md                          # 项目说明
+├── requirements.txt                   # 依赖包
+└── results/                           # 结果输出
+```
+
+## 安装依赖
+```bash
+pip install -r requirements.txt
+pip install -e .
+```
+
+## 运行项目
+```bash
+occ-gain-opt
+```
+
+## 主要功能
+1. **模拟相机响应**: 模拟不同增益设置下的图像采集
+2. **增益优化**: 自动寻找最优增益值 (ROI内灰度逼近饱和值)
+3. **性能评估**: 计算MSE/PSNR/SSIM等指标(基于参考图像)
+4. **可视化**: 展示优化过程和结果
+
+## 文档
+文档已集中到 `docs/` 目录。
