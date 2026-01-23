@@ -5,7 +5,10 @@
       "Bash(python3:*)",
       "Bash(cat:*)",
       "Bash(tree:*)",
-      "Bash(file:*)"
+      "Bash(file:*)",
+      "Bash(pip install:*)",
+      "Bash(ls:*)",
+      "Read(//Users/haojiang/Documents/2025/school/uocc/kg/**)"
     ]
   }
 }
