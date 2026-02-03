@@ -119,7 +119,7 @@ python scripts/verify_experiment.py
 - 找出各实验条件下的最优增益设置
 - 生成可视化图表和报告
 
-**输出**: [results/experiment_verification/](results/experiment_verification/)
+**输出**: 结果图表和报告保存在 `results/algorithm_validation/` 与 `results/iterative_validation/`。
 
 #### 2. 算法性能验证
 测试算法在真实数据上的预测准确性：
@@ -165,6 +165,32 @@ python scripts/validate_iterative_algorithm.py
 ## 复现严格性说明
 详见 `docs/REPRODUCTION_FIDELITY.md`。
 
+## 真实数据集测试结果
+已在 ISO‑Texp 真实数据集上执行验证（脚本见 `scripts/validate_algorithm_on_real_data.py` 与 `scripts/validate_iterative_algorithm.py`）。核心结果如下：
+
+- 平均预测误差（6 组）：**增益误差 14.88 dB**、**灰度误差 129.52**
+- 迭代优化 vs 单次优化：  
+  - **turbidity/ISO**：迭代更优（误差降低 9.62）  
+  - **bubble/Texp、tap water/Texp**：迭代与单次相当  
+  - **turbidity/Texp**：迭代未改善
+
+**按实验汇总（目标灰度≈242.25）**：
+
+| 实验 | 初始灰度 | 迭代优化灰度 / 误差 | 单次优化灰度 / 误差 |
+|---|---:|---:|---:|
+| bubble/ISO | 37.56 | 54.07 / 188.18 | 117.23 / 125.02 |
+| bubble/Texp | 0.52 | 106.77 / 135.48 | 106.77 / 135.48 |
+| tap water/ISO | 129.32 | 129.32 / 112.93 | 129.32 / 112.93 |
+| tap water/Texp | 75.21 | 142.73 / 99.52 | 142.73 / 99.52 |
+| turbidity/ISO | 0.52 | 123.20 / 119.05 | 113.58 / 128.67 |
+| turbidity/Texp | 108.15 | 66.73 / 175.52 | 66.73 / 175.52 |
+
+结果文件：
+- `results/algorithm_validation/validation_report.txt`
+- `results/algorithm_validation/algorithm_validation_summary.png`
+- `results/iterative_validation/iterative_validation_report.txt`
+- `results/iterative_validation/iterative_vs_single_summary.png`
+
 ### 验证功能 ✨
 1. **实验数据加载器**: [experiment_loader.py](src/occ_gain_opt/experiment_loader.py)
    - 解析实验图片文件名
@@ -193,9 +219,8 @@ python scripts/validate_iterative_algorithm.py
 ### 主要发现
 
 1. **算法有效性** ✅
-   - Tap Water/Texp: 增益预测误差仅 **0.40 dB**
-   - 所有数据集均未出现过饱和 (0%饱和度)
-   - 算法能显著改善图像质量 (平均提升60+灰度值)
+   - Tap Water/Texp: 增益预测误差 **0.40 dB**
+   - 灰度改善幅度在不同实验中差异较大（详见报告）
 
 2. **迭代 vs 单次** 📊
    | 实验 | 迭代优化改善 | 单次优化改善 | 更优方法 |
@@ -208,13 +233,9 @@ python scripts/validate_iterative_algorithm.py
    | Turbidity/Texp | -30.9% | -30.9% | 相同 |
 
 3. **推荐策略**
-   - **低灰度场景 (<50)**: 使用迭代优化
-   - **中等灰度 (50-150)**: 使用单次优化
-   - **高灰度 (>200)**: 无需优化
-   - **动态场景**: 使用迭代优化
+   - 推荐根据报告中的误差与改善幅度选择策略
 
 ### 详细报告
-- [实验数据分析](results/experiment_verification/SUMMARY.md)
 - [算法性能分析](results/algorithm_validation/ALGORITHM_ANALYSIS.md)
 - [迭代优化对比](results/iterative_validation/ITERATIVE_SUMMARY.md)
 
@@ -259,5 +280,5 @@ python scripts/validate_iterative_algorithm.py
 - 实验数据来源于ISO-Texp实验数据集
 
 ---
-**最后更新**: 2025-01-23
+**最后更新**: 2026-02-03
 **验证状态**: ✅ 已完成真实实验数据验证
