@@ -159,6 +159,12 @@ python scripts/validate_iterative_algorithm.py
 3. **性能评估**: 计算MSE/PSNR/SSIM等指标
 4. **可视化**: 展示优化过程和结果
 
+## 算法效果图
+![算法真实效果对比图](results/plots/algorithm_real_effect.png)
+
+## 复现严格性说明
+详见 `docs/REPRODUCTION_FIDELITY.md`。
+
 ### 验证功能 ✨
 1. **实验数据加载器**: [experiment_loader.py](src/occ_gain_opt/experiment_loader.py)
    - 解析实验图片文件名
