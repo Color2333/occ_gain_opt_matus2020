@@ -11,6 +11,86 @@ import numpy as np
 from .config import CameraConfig, LEDConfig, ROIStrategy, ExperimentConfig
 
 
+# ---- 公共 ROI mask 工具函数 (可被任意模块复用) ----
+
+def create_center_roi_mask(image: np.ndarray, roi_size: int = 300) -> np.ndarray:
+    """
+    在图像中心创建 roi_size × roi_size 的 ROI 掩码
+
+    Args:
+        image: 输入图像 (2D 或 3D numpy 数组)
+        roi_size: ROI 边长 (像素)
+
+    Returns:
+        与 image 同尺寸的 uint8 掩码 (ROI=1, 其余=0)
+    """
+    height, width = image.shape[:2]
+    roi_w = min(roi_size, width)
+    roi_h = min(roi_size, height)
+    x = (width - roi_w) // 2
+    y = (height - roi_h) // 2
+    mask = np.zeros((height, width), dtype=np.uint8)
+    mask[y:y + roi_h, x:x + roi_w] = 1
+    return mask
+
+
+def create_auto_roi_mask(image: np.ndarray, roi_size: int = 300) -> np.ndarray:
+    """
+    自动找最亮区域作为 ROI (优先取最亮连通域, 否则取最亮滑窗)
+
+    阈值自适应: 使用图像最大灰度值的 70% 作为阈值, 至少为 10。
+    检测到的区域会被扩展到至少 roi_size × roi_size。
+
+    Args:
+        image: 输入图像 (灰度 2D 或彩色 3D numpy 数组)
+        roi_size: ROI 最小边长 (像素)
+
+    Returns:
+        与 image 同尺寸的 uint8 掩码 (ROI=1, 其余=0)
+    """
+    gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # 自适应阈值: 取最大灰度值的 70%, 至少为 10
+    adaptive_thresh = max(int(float(gray.max()) * 0.7), 10)
+    _, thresh_img = cv2.threshold(gray, adaptive_thresh, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(thresh_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if contours:
+        max_contour = max(contours, key=cv2.contourArea)
+        x, y, w, h = cv2.boundingRect(max_contour)
+        # 将检测到的区域扩展到至少 roi_size 大小
+        cx, cy = x + w // 2, y + h // 2
+        new_w = max(w, roi_size)
+        new_h = max(h, roi_size)
+        x = max(0, cx - new_w // 2)
+        y = max(0, cy - new_h // 2)
+        new_w = min(gray.shape[1] - x, new_w)
+        new_h = min(gray.shape[0] - y, new_h)
+        mask = np.zeros_like(gray, dtype=np.uint8)
+        mask[y:y + new_h, x:x + new_w] = 1
+        return mask
+
+    # 无明显亮区时退化为滑窗搜索最亮区域
+    h, w = gray.shape
+    roi_w = min(roi_size, w)
+    roi_h = min(roi_size, h)
+    max_mean = -1
+    best_x = 0
+    best_y = 0
+    step = max(roi_size // 4, 10)
+    for sy in range(0, h - roi_h + 1, step):
+        for sx in range(0, w - roi_w + 1, step):
+            window = gray[sy:sy + roi_h, sx:sx + roi_w]
+            mean_val = float(np.mean(window))
+            if mean_val > max_mean:
+                max_mean = mean_val
+                best_x = sx
+                best_y = sy
+    mask = np.zeros_like(gray, dtype=np.uint8)
+    mask[best_y:best_y + roi_h, best_x:best_x + roi_w] = 1
+    return mask
+
+
 class DataAcquisition:
     """数据采集类 - 模拟相机图像采集"""
 
@@ -69,7 +149,8 @@ class DataAcquisition:
 
     def select_roi(self, strategy: str = ROIStrategy.CENTER,
                    manual_coords: Optional[Tuple[int, int, int, int]] = None,
-                   image: Optional[np.ndarray] = None) -> np.ndarray:
+                   image: Optional[np.ndarray] = None,
+                   roi_size: int = 300) -> np.ndarray:
         """
         选择ROI区域
 
@@ -77,16 +158,15 @@ class DataAcquisition:
             strategy: ROI选择策略
             manual_coords: 手动坐标 (x, y, w, h)
             image: 用于自动选择的图像
+            roi_size: ROI 边长 (仅 CENTER / AUTO_BRIGHTNESS 使用)
 
         Returns:
             ROI掩码
         """
         if strategy == ROIStrategy.CENTER:
-            roi_width, roi_height = 100, 100
-            x = (self.width - roi_width) // 2
-            y = (self.height - roi_height) // 2
-            self.roi_mask = np.zeros((self.height, self.width), dtype=np.uint8)
-            self.roi_mask[y:y + roi_height, x:x + roi_width] = 1
+            # 使用一个临时图像占位 (仅需尺寸信息)
+            placeholder = np.zeros((self.height, self.width), dtype=np.uint8)
+            self.roi_mask = create_center_roi_mask(placeholder, roi_size=roi_size)
 
         elif strategy == ROIStrategy.MANUAL and manual_coords:
             x, y, w, h = manual_coords
@@ -94,25 +174,10 @@ class DataAcquisition:
             self.roi_mask[y:y + h, x:x + w] = 1
 
         elif strategy == ROIStrategy.AUTO_BRIGHTNESS and image is not None:
-            _, threshold = cv2.threshold(image, 200, 255, cv2.THRESH_BINARY)
-            contours, _ = cv2.findContours(threshold, cv2.RETR_EXTERNAL,
-                                           cv2.CHAIN_APPROX_SIMPLE)
+            self.roi_mask = create_auto_roi_mask(image, roi_size=roi_size)
 
-            if contours:
-                max_contour = max(contours, key=cv2.contourArea)
-                x, y, w, h = cv2.boundingRect(max_contour)
-                padding = 10
-                x = max(0, x - padding)
-                y = max(0, y - padding)
-                w = min(self.width - x, w + 2 * padding)
-                h = min(self.height - y, h + 2 * padding)
-
-                self.roi_mask = np.zeros((self.height, self.width), dtype=np.uint8)
-                self.roi_mask[y:y + h, x:x + w] = 1
-            else:
-                return self.select_roi(ROIStrategy.CENTER)
         else:
-            return self.select_roi(ROIStrategy.CENTER)
+            return self.select_roi(ROIStrategy.CENTER, roi_size=roi_size)
 
         return self.roi_mask
 
