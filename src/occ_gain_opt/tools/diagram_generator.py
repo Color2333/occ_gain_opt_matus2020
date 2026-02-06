@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from ..config import ROIStrategy, ExperimentConfig
-from ..data_acquisition import DataAcquisition
+from ..data_acquisition import DataAcquisition, create_center_roi_mask, create_auto_roi_mask
 from ..experiment_loader import ExperimentLoader, ExperimentImage
 from ..gain_optimization import GainOptimizer, AdaptiveGainOptimizer
 
@@ -91,55 +91,10 @@ def _draw_roi_box(ax, roi_mask):
                 "r-", linewidth=2)
 
 
-def _center_roi_mask(image: np.ndarray, roi_size: int = 100) -> np.ndarray:
-    height, width = image.shape[:2]
-    roi_w = min(roi_size, width)
-    roi_h = min(roi_size, height)
-    x = (width - roi_w) // 2
-    y = (height - roi_h) // 2
-    mask = np.zeros((height, width), dtype=np.uint8)
-    mask[y:y + roi_h, x:x + roi_w] = 1
-    return mask
 
-
-def _auto_roi_mask(image: np.ndarray, roi_size: int = 100) -> np.ndarray:
-    """
-    自动找最亮区域作为ROI (优先取最亮连通域, 否则取最亮窗口)
-    """
-    gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, threshold = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
-    contours, _ = cv2.findContours(threshold, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    if contours:
-        max_contour = max(contours, key=cv2.contourArea)
-        x, y, w, h = cv2.boundingRect(max_contour)
-        padding = 10
-        x = max(0, x - padding)
-        y = max(0, y - padding)
-        w = min(gray.shape[1] - x, w + 2 * padding)
-        h = min(gray.shape[0] - y, h + 2 * padding)
-        mask = np.zeros_like(gray, dtype=np.uint8)
-        mask[y:y + h, x:x + w] = 1
-        return mask
-
-    h, w = gray.shape
-    roi_w = min(roi_size, w)
-    roi_h = min(roi_size, h)
-    max_mean = -1
-    best_x = 0
-    best_y = 0
-    step = max(roi_size // 4, 10)
-    for y in range(0, h - roi_h + 1, step):
-        for x in range(0, w - roi_w + 1, step):
-            window = gray[y:y + roi_h, x:x + roi_w]
-            mean_val = float(np.mean(window))
-            if mean_val > max_mean:
-                max_mean = mean_val
-                best_x = x
-                best_y = y
-    mask = np.zeros_like(gray, dtype=np.uint8)
-    mask[best_y:best_y + roi_h, best_x:best_x + roi_w] = 1
-    return mask
+# ROI 函数已统一到 data_acquisition 模块:
+#   create_center_roi_mask(image, roi_size=300)
+#   create_auto_roi_mask(image, roi_size=300)
 
 
 def _pick_real_images(images: List[ExperimentImage]) -> Tuple[ExperimentImage, ExperimentImage]:
@@ -156,7 +111,7 @@ def _select_image_by_target(images: List[ExperimentImage],
         img.load()
         if img.gray_image is None:
             continue
-        roi_mask = _auto_roi_mask(img.gray_image) if use_auto_roi else _center_roi_mask(img.gray_image)
+        roi_mask = create_auto_roi_mask(img.gray_image) if use_auto_roi else create_center_roi_mask(img.gray_image)
         roi_mean = float(np.mean(img.gray_image[roi_mask == 1]))
         error = abs(roi_mean - target_gray)
         if best_error is None or error < best_error:
@@ -198,7 +153,7 @@ def generate_real_algorithm_effect_figure(data_dir: str = "ISO-Texp",
         img.load()
         if img.gray_image is None:
             continue
-        roi_mask = _auto_roi_mask(img.gray_image)
+        roi_mask = create_auto_roi_mask(img.gray_image)
         roi_means.append(float(np.mean(img.gray_image[roi_mask == 1])))
     max_mean = max(roi_means) if roi_means else 255.0
     target_gray = 0.95 * max_mean
@@ -210,7 +165,7 @@ def generate_real_algorithm_effect_figure(data_dir: str = "ISO-Texp",
 
     ax1 = fig.add_subplot(gs[0, 0])
     ax1.imshow(before_img.gray_image, cmap="gray", vmin=0, vmax=255)
-    roi_before = _auto_roi_mask(before_img.gray_image)
+    roi_before = create_auto_roi_mask(before_img.gray_image)
     _draw_roi_box(ax1, roi_before)
     mean_before = float(np.mean(before_img.gray_image[roi_before == 1]))
     before_gain = before_img.calculate_equivalent_gain()
@@ -230,7 +185,7 @@ def generate_real_algorithm_effect_figure(data_dir: str = "ISO-Texp",
 
     ax2 = fig.add_subplot(gs[0, 1])
     ax2.imshow(after_img.gray_image, cmap="gray", vmin=0, vmax=255)
-    roi_after = _auto_roi_mask(after_img.gray_image)
+    roi_after = create_auto_roi_mask(after_img.gray_image)
     _draw_roi_box(ax2, roi_after)
     mean_after = float(np.mean(after_img.gray_image[roi_after == 1]))
     after_gain = after_img.calculate_equivalent_gain()
@@ -332,7 +287,7 @@ def generate_experiment_principle_diagram_real(data_dir: str = "ISO-Texp",
     for idx, (exp_img, title) in enumerate(zip(images, titles)):
         ax = fig.add_subplot(gs[0, idx])
         ax.imshow(exp_img.gray_image, cmap="gray", vmin=0, vmax=255)
-        roi_mask = _center_roi_mask(exp_img.gray_image)
+        roi_mask = create_center_roi_mask(exp_img.gray_image)
         _draw_roi_box(ax, roi_mask)
         ax.set_title(title, fontsize=12, fontweight="bold")
         ax.axis("off")
@@ -513,7 +468,7 @@ def generate_adaptive_iteration_strip(data_dir: str = "ISO-Texp",
 
     for idx, (ax, exp_img) in enumerate(zip(axes.flatten(), step_images), start=1):
         ax.imshow(exp_img.gray_image, cmap="gray", vmin=0, vmax=255)
-        roi_mask = _center_roi_mask(exp_img.gray_image)
+        roi_mask = create_center_roi_mask(exp_img.gray_image)
         _draw_roi_box(ax, roi_mask)
         roi_mean = float(np.mean(exp_img.gray_image[roi_mask == 1]))
         gain_db = exp_img.calculate_equivalent_gain()
@@ -572,7 +527,7 @@ def generate_real_iteration_strip_from_dataset(data_dir: str,
         img.load()
         if img.gray_image is None:
             continue
-        roi_mask = _auto_roi_mask(img.gray_image)
+        roi_mask = create_auto_roi_mask(img.gray_image)
         roi_mean = float(np.mean(img.gray_image[roi_mask == 1]))
         gain_db = img.calculate_equivalent_gain()
         records.append((img, roi_mean, gain_db))
@@ -614,7 +569,7 @@ def generate_real_iteration_strip_from_dataset(data_dir: str,
 
     for idx, (ax, (exp_img, roi_mean, gain_db)) in enumerate(zip(axes.flatten(), history), start=1):
         ax.imshow(exp_img.gray_image, cmap="gray", vmin=0, vmax=255)
-        roi_mask = _auto_roi_mask(exp_img.gray_image)
+        roi_mask = create_auto_roi_mask(exp_img.gray_image)
         _draw_roi_box(ax, roi_mask)
         texp = f"1/{1/exp_img.exposure_time:.0f}"
         ax.set_title(f"Iter {idx}", fontsize=11, fontweight="bold")
@@ -675,7 +630,7 @@ def generate_real_algorithm_effect_figure_for_condition(data_dir: str,
         img.load()
         if img.gray_image is None:
             continue
-        roi_mask = _auto_roi_mask(img.gray_image)
+        roi_mask = create_auto_roi_mask(img.gray_image)
         roi_means.append(float(np.mean(img.gray_image[roi_mask == 1])))
     max_mean = max(roi_means) if roi_means else 255.0
     target_gray = 0.95 * max_mean
@@ -686,7 +641,7 @@ def generate_real_algorithm_effect_figure_for_condition(data_dir: str,
 
     ax1 = fig.add_subplot(gs[0, 0])
     ax1.imshow(before_img.gray_image, cmap="gray", vmin=0, vmax=255)
-    roi_before = _auto_roi_mask(before_img.gray_image)
+    roi_before = create_auto_roi_mask(before_img.gray_image)
     _draw_roi_box(ax1, roi_before)
     mean_before = float(np.mean(before_img.gray_image[roi_before == 1]))
     before_gain = before_img.calculate_equivalent_gain()
@@ -706,7 +661,7 @@ def generate_real_algorithm_effect_figure_for_condition(data_dir: str,
 
     ax2 = fig.add_subplot(gs[0, 1])
     ax2.imshow(after_img.gray_image, cmap="gray", vmin=0, vmax=255)
-    roi_after = _auto_roi_mask(after_img.gray_image)
+    roi_after = create_auto_roi_mask(after_img.gray_image)
     _draw_roi_box(ax2, roi_after)
     mean_after = float(np.mean(after_img.gray_image[roi_after == 1]))
     after_gain = after_img.calculate_equivalent_gain()
