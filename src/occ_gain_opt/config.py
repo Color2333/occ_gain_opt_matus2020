@@ -46,6 +46,7 @@ class ROIStrategy:
     CENTER = "center"           # 中心区域
     MANUAL = "manual"           # 手动选择
     AUTO_BRIGHTNESS = "auto"    # 自动选择最亮区域
+    SYNC_BASED = "sync_based"   # 基于同步头的精确数据包ROI
 
 
 class OptimizationConfig:
@@ -118,3 +119,32 @@ class VisualizationConfig:
     SAVE_PLOTS = True
     PLOT_DPI = 300
     OUTPUT_DIR = 'results/plots'
+
+
+class DemodulationConfig:
+    """OOK 解调配置"""
+    # 数据包参数
+    DATA_BITS = 32                      # 数据位长度 (p32)
+    SYNC_PATTERN = None                 # 同步头比特模式; None = 自动检测
+
+    # LED 区域检测
+    LED_CHANNEL = "green"               # 使用的颜色通道
+    COL_MARGIN_RATIO = 0.1              # LED列边界向内收缩比例
+
+    # 信号处理
+    SMOOTHING_SIGMA = 1.5               # 行均值高斯平滑 sigma
+    THRESHOLD_METHOD = "otsu"           # 二值化方法: "otsu", "midpoint", "percentile"
+    PERCENTILE_LOW = 30                 # percentile 方法的低分位数
+    PERCENTILE_HIGH = 70               # percentile 方法的高分位数
+
+    # 时钟恢复
+    MIN_BIT_PERIOD = 10                 # 最小位周期 (行数)
+    MAX_BIT_PERIOD = 80                 # 最大位周期 (行数)
+
+    # 同步头检测
+    CORRELATION_THRESHOLD = 0.7         # 相关检测阈值
+    MIN_PACKETS = 1                     # 图像中至少需要的完整数据包数
+
+    # 自动检测参数
+    AUTO_DETECT_MAX_SYNC_LEN = 16       # 自动检测同步头最大长度 (bits)
+    AUTO_DETECT_MIN_SYNC_LEN = 4        # 自动检测同步头最小长度 (bits)

@@ -65,26 +65,30 @@ kg/
 ├── src/occ_gain_opt/                  # 主包代码
 │   ├── __init__.py
 │   ├── cli.py                         # 命令行入口
-│   ├── config.py                      # 配置参数
-│   ├── data_acquisition.py            # 数据采集模块
+│   ├── config.py                      # 配置参数 (含 DemodulationConfig)
+│   ├── data_acquisition.py            # 数据采集 + ROI策略 (CENTER/AUTO/SYNC_BASED)
+│   ├── demodulation.py                # OOK 解调模块 (同步头检测 + 数据包定位) ✨
 │   ├── gain_optimization.py           # 增益优化算法
 │   ├── performance_evaluation.py      # 性能评估模块
 │   ├── simulation.py                  # 仿真实验
 │   ├── visualization.py               # 可视化工具
 │   ├── examples.py                    # 使用示例
-│   ├── experiment_loader.py           # 实验数据加载器 ✨
+│   ├── experiment_loader.py           # 实验数据加载器
 │   └── tools/                         # 辅助分析/可视化脚本
-├── scripts/                           # 验证脚本 ✨
+├── scripts/                           # 验证脚本
 │   ├── verify_experiment.py           # 实验数据分析
-│   └── validate_iterative_algorithm.py # 迭代优化验证
+│   ├── demo_demodulation.py           # OOK 解调演示 ✨
+│   ├── validate_algorithm_on_real_data.py  # 单次优化验证
+│   └── validate_iterative_algorithm.py     # 迭代优化验证
 ├── docs/                              # 文档
 ├── README.md                          # 项目说明
 ├── requirements.txt                   # 依赖包
 ├── .gitignore                         # Git忽略文件
 └── results/                           # 结果输出
+    ├── demodulation/                   # 解调可视化结果 ✨
     ├── experiment_verification/        # 实验数据验证结果
     ├── algorithm_validation/           # 算法性能验证结果
-    └── iterative_validation/           # 迭代优化验证结果 ✨
+    └── iterative_validation/           # 迭代优化验证结果
 ```
 
 ## 安装依赖
@@ -104,22 +108,41 @@ occ-gain-opt
 python -m occ_gain_opt.examples
 ```
 
+### 完整可复现工作流
+
+按顺序执行以下步骤，即可从原始实验数据复现全部结果：
+
+```bash
+# 0. 安装依赖
+pip install -r requirements.txt && pip install -e .
+
+# 1. OOK 解调 & 同步头检测 (验证信号解调能力)
+python scripts/demo_demodulation.py
+
+# 2. 单次增益优化验证 (使用 sync-based ROI)
+python scripts/validate_algorithm_on_real_data.py
+
+# 3. 迭代优化 vs 单次优化对比 (使用 sync-based ROI)
+python scripts/validate_iterative_algorithm.py
+```
+
 ### 实验数据验证
 
-#### 1. 实验数据分析
-分析真实实验图片的增益-灰度特性：
+#### 1. OOK 解调演示
+从条纹图像中检测同步头并定位完整数据包：
 ```bash
-python scripts/verify_experiment.py
+python scripts/demo_demodulation.py
 ```
 
 **功能**:
-- 加载并解析实验图片 (Bubble, Tap Water, Turbidity)
-- 自动检测ROI区域
-- 分析增益-灰度响应曲线
-- 找出各实验条件下的最优增益设置
-- 生成可视化图表和报告
+- 检测 LED 列范围 (绿通道 Otsu 分割)
+- 提取行均值曲线并二值化
+- 检测同步头 (超长全亮段，~8 bit 连续1)
+- 以同步头为锚点精确位采样 (周期 ~12.5 行/bit)
+- 生成 6 面板可视化：原图+LED列范围、行均值曲线、二值化+采样点、比特序列、同步ROI叠加、统计信息
+- 跨多种增益条件测试 (ISO=35/640/3200)
 
-**输出**: 结果图表和报告保存在 `results/algorithm_validation/` 与 `results/iterative_validation/`。
+**输出**: [results/demodulation/](results/demodulation/)
 
 #### 2. 算法性能验证
 测试算法在真实数据上的预测准确性：
@@ -128,30 +151,38 @@ python scripts/validate_algorithm_on_real_data.py
 ```
 
 **功能**:
+- 使用 **sync-based ROI** 精确覆盖数据包区域 (检测失败自动退回 auto-brightness)
 - 从最低增益开始模拟算法优化
 - 对比预测值与实际最优值
-- 分析算法的预测误差和适用性
+- 在 6 种实验条件 (bubble/tap water/turbidity × ISO/Texp) 上验证
 
 **输出**: [results/algorithm_validation/](results/algorithm_validation/)
 
-#### 3. 迭代优化验证 ⭐
+#### 3. 迭代优化验证
 对比单次计算和迭代优化两种策略：
 ```bash
 python scripts/validate_iterative_algorithm.py
 ```
 
 **功能**:
+- 使用 **sync-based ROI** 精确覆盖数据包区域
 - 实现迭代优化算法 (学习率α=0.5)
 - 对比单次优化 vs 迭代优化
-- 生成详细的8合1对比图（包含图像对比、收敛曲线、误差分析等）
-- 验证算法在6种实验条件下的表现
+- 生成详细的对比图（包含图像对比、收敛曲线、误差分析等）
 
 **输出**: [results/iterative_validation/](results/iterative_validation/)
-- 各实验的详细对比图
-- 综合对比分析图表
-- 验证报告和总结
 
 ## 主要功能
+
+### OOK 解调 & 同步头检测
+1. **LED 列检测**: 绿通道列均值 + Otsu 分割定位 LED 光源列范围
+2. **行均值提取**: 在 LED 列范围内计算行均值 + 高斯平滑
+3. **同步头检测**: 识别超长全亮游程 (≥5.5个位周期) 作为同步头
+4. **精确位采样**: 以同步头为锚点对齐，消除累积相位漂移
+5. **数据包定位**: 两个同步头之间的区域 = 一个完整数据包
+6. **Sync-based ROI**: 精确覆盖数据包条纹区域，替代简单的最亮区域检测
+
+**协议参数**: OOK 调制, 同步头 = 8 bit 全1, 数据 = 32 bit 随机序列 (p32), 位周期 ≈ 12.5 行/bit
 
 ### 仿真功能
 1. **模拟相机响应**: 模拟不同增益设置下的图像采集
@@ -165,25 +196,26 @@ python scripts/validate_iterative_algorithm.py
 ## 复现严格性说明
 详见 `docs/REPRODUCTION_FIDELITY.md`。
 
-## 真实数据集测试结果
-已在 ISO‑Texp 真实数据集上执行验证（脚本见 `scripts/validate_algorithm_on_real_data.py` 与 `scripts/validate_iterative_algorithm.py`）。核心结果如下：
+## 真实数据集测试结果 (Sync-based ROI)
 
-- 平均预测误差（6 组）：**增益误差 14.88 dB**、**灰度误差 129.52**
-- 迭代优化 vs 单次优化：  
-  - **turbidity/ISO**：迭代更优（误差降低 9.62）  
-  - **bubble/Texp、tap water/Texp**：迭代与单次相当  
-  - **turbidity/Texp**：迭代未改善
+> 以下结果使用 **sync-based ROI** (基于同步头检测的精确数据包区域)，替代了早期的 auto-brightness ROI。
+
+已在 ISO-Texp 真实数据集上执行验证。核心结果如下：
+
+- 平均预测误差（6 组）：**增益误差 27.22 dB**、**灰度误差 155.07**
+- 迭代优化在 **tap water/Texp** 条件下明显优于单次优化（改善率 16.8% vs 8.6%）
+- 收敛通常只需 **1-4 次迭代**
 
 **按实验汇总（目标灰度≈242.25）**：
 
-| 实验 | 初始灰度 | 迭代优化灰度 / 误差 | 单次优化灰度 / 误差 |
-|---|---:|---:|---:|
-| bubble/ISO | 37.56 | 54.07 / 188.18 | 117.23 / 125.02 |
-| bubble/Texp | 0.52 | 106.77 / 135.48 | 106.77 / 135.48 |
-| tap water/ISO | 129.32 | 129.32 / 112.93 | 129.32 / 112.93 |
-| tap water/Texp | 75.21 | 142.73 / 99.52 | 142.73 / 99.52 |
-| turbidity/ISO | 0.52 | 123.20 / 119.05 | 113.58 / 128.67 |
-| turbidity/Texp | 108.15 | 66.73 / 175.52 | 66.73 / 175.52 |
+| 实验 | 初始灰度 | 迭代优化灰度 / 误差 | 单次优化灰度 / 误差 | 更优方法 |
+|---|---:|---:|---:|---|
+| bubble/ISO | 65.96 | 56.43 / 185.82 | 56.43 / 185.82 | 相同 |
+| bubble/Texp | 0.05 | 80.63 / 161.62 | 80.63 / 161.62 | 相同 |
+| tap water/ISO | 86.05 | 86.05 / 156.20 | 86.05 / 156.20 | 相同 |
+| tap water/Texp | 86.88 | 112.95 / 129.30 | 100.28 / 141.97 | **迭代** |
+| turbidity/ISO | 0.05 | 116.72 / 125.53 | 116.72 / 125.53 | 相同 |
+| turbidity/Texp | 81.98 | 82.98 / 159.27 | 82.98 / 159.27 | 相同 |
 
 结果文件：
 - `results/algorithm_validation/validation_report.txt`
@@ -191,22 +223,20 @@ python scripts/validate_iterative_algorithm.py
 - `results/iterative_validation/iterative_validation_report.txt`
 - `results/iterative_validation/iterative_vs_single_summary.png`
 
-### 验证功能 ✨
-1. **实验数据加载器**: [experiment_loader.py](src/occ_gain_opt/experiment_loader.py)
-   - 解析实验图片文件名
-   - 计算等效增益
-   - 自动ROI检测
-   - 支持多种筛选条件
+### 验证功能
+1. **OOK 解调器**: [demodulation.py](src/occ_gain_opt/demodulation.py)
+   - 完整流水线: LED列检测 → 行均值 → 二值化 → 同步头检测 → 位采样 → 数据包提取
+   - 支持 `OOKDemodulator.demodulate(image)` / `get_packet_roi_mask(image)` / `get_signal_quality(image)`
+   - 输出 `DemodulationResult` 数据类，含行曲线、比特序列、同步位置、ROI掩码、置信度等
 
-2. **单次优化验证**: 基于论文公式的一次性预测
-   - 适用于中等灰度场景 (50-150)
-   - 计算效率高
-   - 5/6实验场景表现良好
+2. **ROI 策略**: [data_acquisition.py](src/occ_gain_opt/data_acquisition.py)
+   - `CENTER`: 图像中心固定区域
+   - `AUTO_BRIGHTNESS`: 自动检测最亮区域
+   - `SYNC_BASED`: 基于同步头的精确数据包 ROI (新增)
+   - 验证脚本中自动 fallback: SYNC_BASED → AUTO_BRIGHTNESS
 
-3. **迭代优化验证**: 渐进式优化策略
-   - 平均2.5次迭代收敛
-   - 在极端场景下表现更稳定
-   - Turbidity/ISO实验优于单次优化 (50.8% vs 46.8%)
+3. **单次优化验证**: 基于论文公式的一次性预测
+4. **迭代优化验证**: 渐进式优化策略 (α=0.5, 1-4次收敛)
 
 ## 验证结果总结
 
@@ -218,22 +248,24 @@ python scripts/validate_iterative_algorithm.py
 
 ### 主要发现
 
-1. **算法有效性** ✅
-   - Tap Water/Texp: 增益预测误差 **0.40 dB**
-   - 灰度改善幅度在不同实验中差异较大（详见报告）
+1. **Sync-based ROI 有效性** ✅
+   - 同步头检测在 ISO=35 ~ ISO=3200 全增益范围内稳定工作 (置信度 1.000)
+   - 精确定位数据包区域，替代简单的最亮区域检测
+   - 协议参数自动恢复: 同步头=8bit全1, 位周期≈12.5行/bit
 
-2. **迭代 vs 单次** 📊
+2. **迭代 vs 单次** (Sync-based ROI)
    | 实验 | 迭代优化改善 | 单次优化改善 | 更优方法 |
    |-----|------------|------------|---------|
-   | Bubble/ISO | 8.1% | 38.9% | 单次 |
-   | Bubble/Texp | 44.0% | 44.0% | 相同 |
+   | Bubble/ISO | -5.4% | -5.4% | 相同 |
+   | Bubble/Texp | 33.3% | 33.3% | 相同 |
    | Tap Water/ISO | 0.0% | 0.0% | 相同 |
-   | Tap Water/Texp | 40.4% | 40.4% | 相同 |
-   | **Turbidity/ISO** | **50.8%** | 46.8% | **迭代** ⭐ |
-   | Turbidity/Texp | -30.9% | -30.9% | 相同 |
+   | **Tap Water/Texp** | **16.8%** | 8.6% | **迭代** |
+   | Turbidity/ISO | 48.2% | 48.2% | 相同 |
+   | Turbidity/Texp | 0.6% | 0.6% | 相同 |
 
 3. **推荐策略**
-   - 推荐根据报告中的误差与改善幅度选择策略
+   - 使用 sync-based ROI 进行精确数据包定位
+   - 迭代优化在多数场景下与单次相当，在 tap water/Texp 条件下明显更优
 
 ### 详细报告
 - [算法性能分析](results/algorithm_validation/ALGORITHM_ANALYSIS.md)
@@ -262,8 +294,9 @@ python scripts/validate_iterative_algorithm.py
 ## 技术栈
 - **Python 3.8+**
 - **NumPy**: 数值计算
-- **OpenCV**: 图像处理
-- **Matplotlib**: 可视化（支持中文显示）
+- **SciPy**: 高斯平滑 (gaussian_filter1d)
+- **OpenCV**: 图像处理、Otsu 分割、轮廓检测
+- **Matplotlib**: 可视化（支持中文显示, macOS Hiragino Sans GB）
 - **实验数据**: ISO-Texp/ (234张真实实验图片)
 
 ## 未来改进方向
@@ -280,5 +313,5 @@ python scripts/validate_iterative_algorithm.py
 - 实验数据来源于ISO-Texp实验数据集
 
 ---
-**最后更新**: 2026-02-03
-**验证状态**: ✅ 已完成真实实验数据验证
+**最后更新**: 2026-02-27
+**验证状态**: ✅ 已完成真实实验数据验证 (含 sync-based ROI)

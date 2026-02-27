@@ -3,6 +3,7 @@
 __all__ = [
     "config",
     "data_acquisition",
+    "demodulation",
     "gain_optimization",
     "performance_evaluation",
     "simulation",
