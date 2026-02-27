@@ -16,7 +16,11 @@ import cv2
 from matplotlib.gridspec import GridSpec
 
 # 配置中文字体
-plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'PingFang SC', 'STHeiti', 'SimHei']
+plt.rcParams['font.sans-serif'] = [
+    'Hiragino Sans GB', 'Arial Unicode MS', 'PingFang SC',
+    'Heiti TC', 'SimHei', 'DejaVu Sans',
+]
+plt.rcParams['font.family'] = 'sans-serif'
 plt.rcParams['axes.unicode_minus'] = False
 
 from occ_gain_opt.experiment_loader import ExperimentLoader, ExperimentImage
@@ -37,7 +41,7 @@ def find_closest_image(images, target_gain):
 
 
 def measure_gray_from_image(image_path):
-    """从图片中测量ROI灰度值"""
+    """从图片中测量ROI灰度值 (优先使用 sync-based ROI)"""
     img = cv2.imread(image_path)
     if img is None:
         return None
@@ -46,7 +50,15 @@ def measure_gray_from_image(image_path):
     h, w = gray.shape
 
     data_acq = DataAcquisition(width=w, height=h)
-    roi_mask = data_acq.select_roi(strategy=ROIStrategy.AUTO_BRIGHTNESS, image=gray)
+
+    # 优先使用 sync-based ROI，检测失败则退回自动亮度
+    try:
+        roi_mask = data_acq.select_roi(strategy=ROIStrategy.SYNC_BASED, image=img)
+        if np.sum(roi_mask) == 0:
+            roi_mask = data_acq.select_roi(strategy=ROIStrategy.AUTO_BRIGHTNESS, image=gray)
+    except Exception:
+        roi_mask = data_acq.select_roi(strategy=ROIStrategy.AUTO_BRIGHTNESS, image=gray)
+
     stats = data_acq.get_roi_statistics(gray, roi_mask)
 
     return stats['mean'], stats['std'], stats['saturated_ratio'], img, gray, roi_mask

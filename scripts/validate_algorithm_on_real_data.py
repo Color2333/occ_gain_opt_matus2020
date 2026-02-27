@@ -15,13 +15,39 @@ import matplotlib.pyplot as plt
 import cv2
 
 # 配置中文字体
-plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'PingFang SC', 'STHeiti', 'SimHei', 'DejaVu Sans']
+plt.rcParams['font.sans-serif'] = [
+    'Hiragino Sans GB', 'Arial Unicode MS', 'PingFang SC',
+    'Heiti TC', 'SimHei', 'DejaVu Sans',
+]
+plt.rcParams['font.family'] = 'sans-serif'
 plt.rcParams['axes.unicode_minus'] = False
 
 from occ_gain_opt.experiment_loader import ExperimentLoader
 from occ_gain_opt.data_acquisition import DataAcquisition
 from occ_gain_opt.gain_optimization import GainOptimizer
 from occ_gain_opt.config import ROIStrategy
+
+
+def select_roi_with_fallback(data_acq, image_color, image_gray):
+    """
+    优先使用 SYNC_BASED ROI，若检测失败 (空掩码) 则退回 AUTO_BRIGHTNESS。
+
+    Args:
+        data_acq: DataAcquisition 实例
+        image_color: BGR 彩色图像 (供 SYNC_BASED 使用)
+        image_gray: 灰度图像 (供 AUTO_BRIGHTNESS 回退使用)
+
+    Returns:
+        (roi_mask, strategy_used)
+    """
+    try:
+        roi_mask = data_acq.select_roi(strategy=ROIStrategy.SYNC_BASED, image=image_color)
+        if np.sum(roi_mask) > 0:
+            return roi_mask, "sync_based"
+    except Exception:
+        pass
+    roi_mask = data_acq.select_roi(strategy=ROIStrategy.AUTO_BRIGHTNESS, image=image_gray)
+    return roi_mask, "auto_brightness"
 
 
 def get_real_gain_response(images, experiment_type, image_type):
@@ -38,12 +64,13 @@ def get_real_gain_response(images, experiment_type, image_type):
         if not img.load():
             continue
 
-        gray = img.gray_image
+        color = img.image        # BGR 彩色图
+        gray = img.gray_image    # 灰度图
         h, w = gray.shape
 
-        # 自动检测ROI
+        # 优先使用 sync-based ROI，检测失败则退回自动亮度
         data_acq = DataAcquisition(width=w, height=h)
-        roi_mask = data_acq.select_roi(strategy=ROIStrategy.AUTO_BRIGHTNESS, image=gray)
+        roi_mask, roi_strategy = select_roi_with_fallback(data_acq, color, gray)
         stats = data_acq.get_roi_statistics(gray, roi_mask)
 
         # 计算相对于基准的增益

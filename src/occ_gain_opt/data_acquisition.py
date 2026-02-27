@@ -8,7 +8,7 @@ from typing import Tuple, Optional
 import cv2
 import numpy as np
 
-from .config import CameraConfig, LEDConfig, ROIStrategy, ExperimentConfig
+from .config import CameraConfig, LEDConfig, ROIStrategy, ExperimentConfig, DemodulationConfig
 
 
 # ---- 公共 ROI mask 工具函数 (可被任意模块复用) ----
@@ -89,6 +89,26 @@ def create_auto_roi_mask(image: np.ndarray, roi_size: int = 300) -> np.ndarray:
     mask = np.zeros_like(gray, dtype=np.uint8)
     mask[best_y:best_y + roi_h, best_x:best_x + roi_w] = 1
     return mask
+
+
+def create_sync_based_roi_mask(image: np.ndarray,
+                               demod_config: dict = None) -> np.ndarray:
+    """
+    基于同步头检测创建精确的数据包 ROI 掩码
+
+    使用 OOK 解调器检测条纹码中的同步头位置，
+    返回覆盖完整数据包(同步头之间)的 ROI 掩码。
+
+    Args:
+        image: 输入图像 (BGR 或灰度)
+        demod_config: 可选解调配置字典
+
+    Returns:
+        与 image 同尺寸的 uint8 掩码 (ROI=1, 其余=0)
+    """
+    from .demodulation import OOKDemodulator
+    demodulator = OOKDemodulator(config=demod_config)
+    return demodulator.get_packet_roi_mask(image)
 
 
 class DataAcquisition:
@@ -175,6 +195,9 @@ class DataAcquisition:
 
         elif strategy == ROIStrategy.AUTO_BRIGHTNESS and image is not None:
             self.roi_mask = create_auto_roi_mask(image, roi_size=roi_size)
+
+        elif strategy == ROIStrategy.SYNC_BASED and image is not None:
+            self.roi_mask = create_sync_based_roi_mask(image)
 
         else:
             return self.select_roi(ROIStrategy.CENTER, roi_size=roi_size)
