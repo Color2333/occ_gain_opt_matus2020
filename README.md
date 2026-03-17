@@ -172,6 +172,16 @@ python scripts/validate_iterative_algorithm.py
 
 **输出**: [results/iterative_validation/](results/iterative_validation/)
 
+## 真实装置实时调整
+
+若在真实实验装置下希望**根据当前帧实时返回可调参数**（如增益 dB），由你在外部循环「采集 → 设置相机 → 再采集」：
+
+- 使用 **`occ_gain_opt.realtime`** 模块：
+  - **`compute_next_gain(current_gain_db, image, ...)`**：单步计算，返回 `gain_db`、`converged`、`mean_gray` 等；
+  - **`RealtimeGainController`**：带状态的控制器，循环中反复调用 `step(image)` 即可。
+- 算法返回的 **`gain_db`** 即为建议设置的相机增益 (dB)，可直接用于驱动相机 API。
+- 详细用法与相机对接说明见 [docs/REALTIME_USAGE.md](docs/REALTIME_USAGE.md)。
+
 ## 主要功能
 
 ### OOK 解调 & 同步头检测

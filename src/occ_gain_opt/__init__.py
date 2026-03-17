@@ -6,6 +6,7 @@ __all__ = [
     "demodulation",
     "gain_optimization",
     "performance_evaluation",
+    "realtime",
     "simulation",
     "visualization",
 ]

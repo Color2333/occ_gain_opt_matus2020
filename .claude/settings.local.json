@@ -8,7 +8,15 @@
       "Bash(file:*)",
       "Bash(pip install:*)",
       "Bash(ls:*)",
-      "Read(//Users/haojiang/Documents/2025/school/uocc/kg/**)"
+      "Read(//Users/haojiang/Documents/2025/school/uocc/kg/**)",
+      "Bash(find /Users/haojiang/Documents/2025/school/uocc/kg -name \"*.py\" -exec grep -l \"PNG\\\\|png\\\\|savefig\" {} ;)",
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(git add src/occ_gain_opt/demodulation.py scripts/demo_demodulation.py src/occ_gain_opt/config.py src/occ_gain_opt/data_acquisition.py src/occ_gain_opt/__init__.py scripts/validate_algorithm_on_real_data.py scripts/validate_iterative_algorithm.py README.md)",
+      "Bash(git commit:*)",
+      "Bash(git add CLAUDE.md scripts/ber_vs_gain_analysis.py results/ber_analysis/BER_REPORT.md)",
+      "Bash(git add CLAUDE.md scripts/ber_vs_gain_analysis.py docs/BER_ANALYSIS.md)",
+      "Bash(git push origin main)",
+      "Bash(git add scripts/ber_comparison_plot.py)"
     ]
   }
 }
