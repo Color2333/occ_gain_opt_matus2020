@@ -42,3 +42,8 @@ results/
 .DS_Store
 Thumbs.db
 .claude/settings.local.json
+
+# Large lab reference materials
+others/自适应算法（龚）/
+others/自适应阻尼算法（马）/
+others/data/
