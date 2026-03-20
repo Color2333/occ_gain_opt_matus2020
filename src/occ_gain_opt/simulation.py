@@ -1,30 +1,109 @@
 """
 仿真实验模块
-模拟论文中的实验场景
+使用统一架构: algorithms/ + data_sources/
 """
 
 from typing import Dict, List
 
 import numpy as np
 
-from .config import ExperimentConfig, CameraConfig, ROIStrategy
-from .data_acquisition import DataAcquisition
-from .gain_optimization import GainOptimizer, AdaptiveGainOptimizer
+from .config import ExperimentConfig, CameraConfig, ROIStrategy, CameraParams
+from .data_sources import SimulatedDataSource, create_center_roi_mask, compute_roi_stats
+from .algorithms import get as algo_get
 from .performance_evaluation import PerformanceEvaluator
 
 
 class ExperimentSimulation:
-    """实验仿真类 - 模拟论文中的实验场景"""
+    """实验仿真类 - 使用统一架构"""
 
     def __init__(self):
-        self.data_acq = DataAcquisition()
-        self.optimizer = GainOptimizer(self.data_acq)
-        self.adaptive_optimizer = AdaptiveGainOptimizer(self.data_acq)
+        self.data_source = SimulatedDataSource()
         self.evaluator = PerformanceEvaluator()
-        self.results = {
+        self.results: Dict = {
             'basic': [],
             'adaptive': [],
             'comparison': []
+        }
+
+    def _run_optimization(
+        self,
+        algo_name: str,
+        led_intensity: float,
+        initial_gain_db: float,
+        background_light: float,
+        noise_std: float,
+        max_iterations: int = 20,
+    ) -> Dict:
+        """使用新算法架构运行优化"""
+        # 重置数据源
+        self.data_source = SimulatedDataSource(
+            width=CameraConfig.IMAGE_WIDTH,
+            height=CameraConfig.IMAGE_HEIGHT,
+            noise_std=noise_std,
+        )
+        self.data_source.led_intensity = led_intensity
+        self.data_source.background_light = background_light
+
+        # 初始化算法
+        algo = algo_get(algo_name)()
+
+        # 设置初始参数
+        current_params = CameraParams.from_gain_db(initial_gain_db, 5000.0)
+        self.data_source.set_params(current_params)
+
+        history = []
+        converged = False
+        iteration = 0
+
+        while iteration < max_iterations and not converged:
+            # 采集图像
+            image = self.data_source.get_frame()
+
+            # 选择ROI并计算亮度
+            roi_mask = create_center_roi_mask(image, roi_size=300)
+            stats = compute_roi_stats(image, roi_mask)
+            brightness = stats['mean']
+
+            # 记录状态
+            state = {
+                'iteration': iteration,
+                'gain': current_params.gain_db,
+                'mean_gray': brightness,
+                'std_gray': stats['std'],
+            }
+            history.append(state)
+
+            # 检查收敛
+            if algo.is_converged():
+                converged = True
+                break
+
+            # 计算下一步参数
+            next_params = algo.compute_next_params(current_params, brightness)
+
+            # 检查参数是否变化
+            if abs(next_params.gain_db - current_params.gain_db) < 0.01:
+                converged = True
+                break
+
+            current_params = next_params
+            self.data_source.set_params(current_params)
+            iteration += 1
+
+        # 最终图像
+        final_image = self.data_source.get_frame()
+        roi_mask = create_center_roi_mask(final_image, roi_size=300)
+        final_stats = compute_roi_stats(final_image, roi_mask)
+
+        return {
+            'optimal_gain': current_params.gain_db,
+            'final_gray': final_stats['mean'],
+            'iterations': iteration + 1,
+            'converged': converged,
+            'history': history,
+            'final_image': final_image,
+            'roi_mask': roi_mask,
+            'final_stats': final_stats,
         }
 
     def experiment_1_fixed_led_gain_sweep(self):
@@ -34,16 +113,32 @@ class ExperimentSimulation:
         gains = np.linspace(CameraConfig.GAIN_MIN, CameraConfig.GAIN_MAX, 50)
         background_lights = [20, 50, 100, 150]
 
+        led_intensity = (led_duty_cycle / 100.0) * 255
+
         results = []
         for bg_light in background_lights:
             print(f"\n背景光强: {bg_light}")
-            capture_results = self.data_acq.simulate_capture_sequence(
-                led_duty_cycle, gains, bg_light, noise_std=ExperimentConfig.NOISE_STD,
-                roi_strategy=ROIStrategy.CENTER
-            )
 
-            gray_values = [r['stats']['mean'] for r in capture_results]
-            std_values = [r['stats']['std'] for r in capture_results]
+            # 使用SimulatedDataSource扫描增益
+            data_source = SimulatedDataSource(
+                width=CameraConfig.IMAGE_WIDTH,
+                height=CameraConfig.IMAGE_HEIGHT,
+                noise_std=ExperimentConfig.NOISE_STD,
+            )
+            data_source.led_intensity = led_intensity
+            data_source.background_light = bg_light
+
+            gray_values = []
+            std_values = []
+
+            for gain_db in gains:
+                params = CameraParams.from_gain_db(gain_db, 5000.0)
+                data_source.set_params(params)
+                image = data_source.get_frame()
+                roi_mask = create_center_roi_mask(image, roi_size=300)
+                stats = compute_roi_stats(image, roi_mask)
+                gray_values.append(stats['mean'])
+                std_values.append(stats['std'])
 
             result = {
                 'background_light': bg_light,
@@ -57,8 +152,8 @@ class ExperimentSimulation:
         return results
 
     def experiment_2_gain_optimization(self):
-        """实验2: 增益优化算法"""
-        print("\n=== 实验2: 增益优化算法 ===")
+        """实验2: 增益优化算法对比"""
+        print("\n=== 实验2: 增益优化算法对比 ===")
         led_duty_cycles = [20, 40, 60, 80]
         background_lights = [30, 80, 130]
 
@@ -66,31 +161,32 @@ class ExperimentSimulation:
         for led_dc in led_duty_cycles:
             for bg_light in background_lights:
                 print(f"\nLED占空比: {led_dc}%, 背景光: {bg_light}")
+                led_intensity = (led_dc / 100.0) * 255
 
-                result_basic = self.optimizer.optimize_gain(
-                    led_duty_cycle=led_dc,
-                    initial_gain=0.0,
-                    background_light=bg_light,
-                    noise_std=ExperimentConfig.NOISE_STD,
-                    roi_strategy=ROIStrategy.CENTER
+                result_basic = self._run_optimization(
+                    "single_shot",
+                    led_intensity,
+                    0.0,
+                    bg_light,
+                    ExperimentConfig.NOISE_STD,
                 )
 
-                result_adaptive = self.adaptive_optimizer.optimize_gain(
-                    led_duty_cycle=led_dc,
-                    initial_gain=0.0,
-                    background_light=bg_light,
-                    noise_std=ExperimentConfig.NOISE_STD,
-                    roi_strategy=ROIStrategy.CENTER
+                result_adaptive = self._run_optimization(
+                    "adaptive_iter",
+                    led_intensity,
+                    0.0,
+                    bg_light,
+                    ExperimentConfig.NOISE_STD,
                 )
 
                 eval_basic = self.evaluator.evaluate_optimization_result(
                     result_basic,
-                    reference_image=result_basic.get('reference_image'),
+                    reference_image=result_basic.get('final_image'),
                     roi_mask=result_basic.get('roi_mask')
                 )
                 eval_adaptive = self.evaluator.evaluate_optimization_result(
                     result_adaptive,
-                    reference_image=result_adaptive.get('reference_image'),
+                    reference_image=result_adaptive.get('final_image'),
                     roi_mask=result_adaptive.get('roi_mask')
                 )
 
@@ -125,11 +221,12 @@ class ExperimentSimulation:
         return results
 
     def experiment_3_noise_analysis(self):
-        """实验3: 噪声分析 (在优化闭环中注入噪声)"""
+        """实验3: 噪声分析"""
         print("\n=== 实验3: 噪声分析 ===")
         led_duty_cycle = 50
         background_light = 50
         noise_levels = [0.5, 1.0, 2.0, 5.0, 10.0]
+        led_intensity = (led_duty_cycle / 100.0) * 255
 
         results = []
         for noise_std in noise_levels:
@@ -138,17 +235,17 @@ class ExperimentSimulation:
             run_results = []
 
             for _ in range(runs):
-                result = self.optimizer.optimize_gain(
-                    led_duty_cycle=led_duty_cycle,
-                    initial_gain=0.0,
-                    background_light=background_light,
-                    noise_std=noise_std,
-                    roi_strategy=ROIStrategy.CENTER
+                result = self._run_optimization(
+                    "single_shot",
+                    led_intensity,
+                    0.0,
+                    background_light,
+                    noise_std,
                 )
 
                 eval_result = self.evaluator.evaluate_optimization_result(
                     result,
-                    reference_image=result.get('reference_image'),
+                    reference_image=result.get('final_image'),
                     roi_mask=result.get('roi_mask')
                 )
                 eval_result['noise_std'] = noise_std
@@ -178,6 +275,7 @@ class ExperimentSimulation:
         led_duty_cycle = 50
         background_light = 50
         initial_gains = np.linspace(0, 20, 11)
+        led_intensity = (led_duty_cycle / 100.0) * 255
 
         results = {
             'basic': [],
@@ -187,24 +285,36 @@ class ExperimentSimulation:
         for init_gain in initial_gains:
             print(f"\n初始增益: {init_gain:.1f}dB")
 
-            result_basic = self.optimizer.optimize_gain(
-                led_duty_cycle=led_duty_cycle,
-                initial_gain=init_gain,
-                background_light=background_light,
-                noise_std=ExperimentConfig.NOISE_STD,
-                roi_strategy=ROIStrategy.CENTER
+            result_basic = self._run_optimization(
+                "single_shot",
+                led_intensity,
+                init_gain,
+                background_light,
+                ExperimentConfig.NOISE_STD,
             )
 
-            result_adaptive = self.adaptive_optimizer.optimize_gain(
-                led_duty_cycle=led_duty_cycle,
-                initial_gain=init_gain,
-                background_light=background_light,
-                noise_std=ExperimentConfig.NOISE_STD,
-                roi_strategy=ROIStrategy.CENTER
+            result_adaptive = self._run_optimization(
+                "adaptive_iter",
+                led_intensity,
+                init_gain,
+                background_light,
+                ExperimentConfig.NOISE_STD,
             )
 
-            analysis_basic = self.optimizer.analyze_optimization_curve(result_basic)
-            analysis_adaptive = self.adaptive_optimizer.analyze_optimization_curve(result_adaptive)
+            # 分析收敛曲线
+            def _analyze(history):
+                if len(history) > 1:
+                    gains = [h['gain'] for h in history]
+                    gain_range = max(gains) - min(gains)
+                    gain_changes = [abs(gains[i + 1] - gains[i]) for i in range(len(gains) - 1)]
+                    avg_change = float(np.mean(gain_changes)) if gain_changes else 0.0
+                else:
+                    gain_range = 0.0
+                    avg_change = 0.0
+                return {'gain_range': gain_range, 'average_gain_change': avg_change}
+
+            analysis_basic = _analyze(result_basic['history'])
+            analysis_adaptive = _analyze(result_adaptive['history'])
 
             results['basic'].append({
                 'initial_gain': init_gain,

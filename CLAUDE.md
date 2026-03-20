@@ -37,70 +37,70 @@ python scripts/validate_algorithms.py      # All algorithms on real dataset
 python scripts/ber_comparison_plot.py      # BER comparison visualization
 ```
 
-## Architecture
+## Architecture (Unified)
 
-The package lives in `src/occ_gain_opt/`. Key modules:
+The package lives in `src/occ_gain_opt/`. All code now uses the unified architecture:
 
-### Stable core (do not modify)
+### Core modules
 | Module | Role |
 |--------|------|
-| `config.py` | `CameraConfig`, `LEDConfig`, `ROIStrategy`, `OptimizationConfig`, `DemodulationConfig`, **`CameraParams`** (ISO + exposure) |
+| `config.py` | `CameraParams` (ISO + exposure), `CameraConfig`, `LEDConfig`, `ROIStrategy`, `OptimizationConfig`, `DemodulationConfig` |
 | `demodulation.py` | `OOKDemodulator` — full pipeline: LED column detection → row-mean → binarize → sync-head detection → bit sampling → packet ROI extraction |
 | `performance_evaluation.py` | `PerformanceEvaluator` — MSE, PSNR, SSIM, SNR metrics |
 | `experiment_loader.py` | `ExperimentLoader` — reads the `ISO-Texp/` real image dataset |
 
-### Simulation layer (backward compat)
-| Module | Role |
-|--------|------|
-| `data_acquisition.py` | `DataAcquisition` — simulates image capture + ROI selection |
-| `gain_optimization.py` | `GainOptimizer` / `AdaptiveGainOptimizer` (Matus algorithms, simulation-coupled) |
-| `simulation.py` | `ExperimentSimulation` — scenario runs using the simulation layer |
-| `visualization.py` | `ResultVisualizer` — Matplotlib plots |
-| `realtime.py` | `compute_next_gain()`, `RealtimeGainController` — single-step real-hardware interface |
-| `examples.py` | Six standalone usage examples |
-| `cli.py` | `main()` entry point + `advisor`/`experiment` subcommands |
-
-### Algorithm layer ★ (new)
+### Algorithm layer (`algorithms/`)
 | Module | Role |
 |--------|------|
 | `algorithms/base.py` | `AlgorithmBase` ABC — `compute_next_params(CameraParams, brightness, ber)` |
-| `algorithms/__init__.py` | `REGISTRY`, `@register`, `get(name)`, `list_algorithms()` |
-| `algorithms/matus_single.py` | `MatusSingleAlgorithm` (name="matus_single") |
-| `algorithms/matus_adaptive.py` | `MatusAdaptiveAlgorithm` (name="matus_adaptive") |
-| `algorithms/ma_damping.py` | `MaDampingAlgorithm` (name="ma_damping") — full 5-state machine |
+| `algorithms/__init__.py` | `REGISTRY`, `register()`, `get(name)`, `list_algorithms()` |
+| `algorithms/single_shot.py` | `SingleShotAlgorithm` (name="single_shot") — Paper Eq. 7 |
+| `algorithms/adaptive_iter.py` | `AdaptiveIterAlgorithm` (name="adaptive_iter") — Iterative with learning rate |
+| `algorithms/adaptive_damping.py` | `AdaptiveDampingAlgorithm` (name="adaptive_damping") — Ma 5-state machine |
+| `algorithms/ber_explore.py` | `BerExploreAlgorithm` (name="ber_explore") — BER-guided exploration |
 
-### Data source layer ★ (new)
+### Data source layer (`data_sources/`)
 | Module | Role |
 |--------|------|
 | `data_sources/base.py` | `DataSource` ABC — `get_frame()`, `current_params`, `set_params()` |
 | `data_sources/roi.py` | ROI utilities: `create_center_roi_mask`, `create_auto_roi_mask`, `create_sync_based_roi_mask`, `compute_roi_stats` |
-| `data_sources/simulated.py` | `SimulatedDataSource` |
-| `data_sources/dataset.py` | `DatasetDataSource` (wraps ExperimentLoader, selects nearest-ISO image) |
-| `data_sources/camera.py` | `CameraDataSource` (RTSP, ThreadedCamera) |
+| `data_sources/simulated.py` | `SimulatedDataSource` — simulation environment |
+| `data_sources/dataset.py` | `DatasetDataSource` — wraps ExperimentLoader, selects nearest-ISO image |
+| `data_sources/camera.py` | `CameraDataSource` — RTSP camera interface |
 
-### Hardware layer ★ (new)
+### Hardware layer (`hardware/`)
 | Module | Role |
 |--------|------|
 | `hardware/camera_controller.py` | `CameraController` — manual prompt + Hikvision ISAPI |
 
-### Experiments layer ★ (new)
+### Experiments layer (`experiments/`)
 | Module | Role |
 |--------|------|
 | `experiments/advisor.py` | `run_advisor()` — single-frame three-algorithm advisor |
 | `experiments/closed_loop.py` | `ClosedLoopExperiment` — three-algorithm round-robin experiment |
 | `experiments/batch_demod.py` | `batch_demodulate()` — batch OOK demodulation |
 
-## Algorithm API (new, preferred for real hardware)
+### Other modules
+| Module | Role |
+|--------|------|
+| `simulation.py` | `ExperimentSimulation` — scenario runs using unified architecture |
+| `visualization.py` | `ResultVisualizer` — Matplotlib plots |
+| `realtime.py` | `compute_next_gain()`, `RealtimeGainController` — single-step real-hardware interface |
+| `examples.py` | Six standalone usage examples using unified architecture |
+| `cli.py` | `main()` entry point + `advisor`/`experiment` subcommands |
+| `data_acquisition.py` | Compatibility layer — delegates to `data_sources/` |
+
+## Algorithm API (preferred for real hardware)
 
 ```python
 from occ_gain_opt.algorithms import get as algo_get, list_algorithms
 from occ_gain_opt.config import CameraParams
 
 # List registered algorithms
-print(list_algorithms())  # ['matus_single', 'matus_adaptive', 'ma_damping']
+print(list_algorithms())  # ['single_shot', 'adaptive_iter', 'adaptive_damping', 'ber_explore']
 
 # Single-shot
-algo = algo_get("matus_single")()
+algo = algo_get("single_shot")()
 next_params = algo.compute_next_params(
     CameraParams(iso=35, exposure_us=27.9),
     roi_brightness=110.0
@@ -108,10 +108,28 @@ next_params = algo.compute_next_params(
 print(next_params)  # CameraParams(ISO=77.1, ...)
 
 # Adaptive (stateful across calls)
-algo = algo_get("ma_damping")(target_brightness=125.0)
+algo = algo_get("adaptive_damping")()
 for brightness in measured_brightnesses:
     params = algo.compute_next_params(current_params, brightness)
     current_params = params
+```
+
+## Data Source API
+
+```python
+from occ_gain_opt.data_sources import SimulatedDataSource, DatasetDataSource
+from occ_gain_opt.data_sources import create_center_roi_mask, compute_roi_stats
+from occ_gain_opt.config import CameraParams
+
+# Simulation
+data_source = SimulatedDataSource()
+data_source.set_params(CameraParams(iso=200, exposure_us=27.9))
+frame = data_source.get_frame()
+
+# ROI processing
+roi_mask = create_center_roi_mask(frame, roi_size=300)
+stats = compute_roi_stats(frame, roi_mask)
+print(f"ROI brightness: {stats['mean']:.1f}")
 ```
 
 ## CameraParams

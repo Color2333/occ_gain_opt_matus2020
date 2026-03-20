@@ -56,67 +56,56 @@ def run_all():
 
 
 def quick_test():
-    from .data_acquisition import DataAcquisition
-    from .gain_optimization import GainOptimizer
+    """使用统一架构的快速测试"""
+    from .data_sources import SimulatedDataSource, create_center_roi_mask, compute_roi_stats
+    from .algorithms import list_algorithms, get as algo_get
     from .performance_evaluation import PerformanceEvaluator
-    from .config import ExperimentConfig, ROIStrategy
+    from .config import CameraParams
 
     print("\n运行快速测试...")
-    data_acq = DataAcquisition()
-    optimizer = GainOptimizer(data_acq)
+    print("=" * 60)
+
+    # 创建仿真数据源
+    data_source = SimulatedDataSource(
+        width=640, height=480,
+        led_intensity=128, background_light=50, noise_std=2.0
+    )
     evaluator = PerformanceEvaluator()
 
-    led_duty_cycle = 50
-    background_light = 50
-
-    print(f"\n测试条件:")
-    print(f"  LED占空比: {led_duty_cycle}%")
-    print(f"  背景光强: {background_light}")
-
-    print("\n运行增益优化...")
-    result = optimizer.optimize_gain(
-        led_duty_cycle=led_duty_cycle,
-        initial_gain=0.0,
-        background_light=background_light,
-        noise_std=ExperimentConfig.NOISE_STD,
-        roi_strategy=ROIStrategy.CENTER
-    )
-
-    evaluation = evaluator.evaluate_optimization_result(
-        result,
-        reference_image=result.get('reference_image'),
-        roi_mask=result.get('roi_mask')
-    )
-
-    print("\n结果:")
-    print(f"  最优增益: {result['optimal_gain']:.2f} dB")
-    print(f"  最终灰度值: {result['final_gray']:.2f}")
-    print(f"  目标灰度值: 255")
-    print(f"  灰度误差: {evaluation['gray_error']:.2f}")
-    print(f"  迭代次数: {result['iterations']}")
-    print(f"  是否收敛: {'是' if result['converged'] else '否'}")
-    print(f"  优化得分: {evaluation['optimization_score']:.2f}/100")
-
-    print("\n优化过程:")
-    print("  迭代 |   增益(dB)  |  灰度值  | 标准差")
-    print("-" * 50)
-    for state in result['history']:
-        print(f"   {state['iteration']:2d}   |  {state['gain']:6.2f}   | "
-              f"{state['mean_gray']:6.2f} | {state['std_gray']:5.2f}")
-
-    print("\n✓ 快速测试完成!")
-
-    # 也测试新算法层
-    from .algorithms import list_algorithms, get as algo_get
-    from .config import CameraParams
+    # 测试所有算法
+    algorithms_to_test = ["single_shot", "adaptive_iter", "adaptive_damping"]
     print(f"\n已注册算法: {list_algorithms()}")
-    algo = algo_get("single_shot")()
-    params = CameraParams(iso=35, exposure_us=27.9)
-    next_p = algo.compute_next_params(params, roi_brightness=110.0)
-    print(f"单次公式示例: ISO 35 + 亮度110 → ISO {next_p.iso:.1f} ({next_p.gain_db:+.2f}dB)")
-    print("✓ 算法层测试完成!")
 
-    return result
+    for algo_name in algorithms_to_test:
+        try:
+            print(f"\n--- 测试 {algo_name} 算法 ---")
+            algo = algo_get(algo_name)()
+
+            # 初始参数
+            current_params = CameraParams(iso=35, exposure_us=27.9)
+            data_source.set_params(current_params)
+
+            # 模拟3轮迭代
+            for i in range(3):
+                image = data_source.get_frame()
+                roi_mask = create_center_roi_mask(image, roi_size=300)
+                stats = compute_roi_stats(image, roi_mask)
+                brightness = stats['mean']
+
+                print(f"  迭代 {i}: ISO={current_params.iso:.1f}, "
+                      f"增益={current_params.gain_db:+.2f}dB, 亮度={brightness:.1f}")
+
+                next_params = algo.compute_next_params(current_params, brightness)
+                current_params = next_params
+                data_source.set_params(current_params)
+
+            print(f"  ✓ {algo_name} 测试通过")
+        except Exception as e:
+            print(f"  ✗ {algo_name} 测试失败: {e}")
+
+    print("\n" + "=" * 60)
+    print("✓ 快速测试完成!")
+    print("=" * 60)
 
 
 # ── advisor 子命令 ──────────────────────────────────────────────────────────────

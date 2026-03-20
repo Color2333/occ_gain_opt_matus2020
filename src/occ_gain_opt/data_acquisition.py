@@ -1,118 +1,25 @@
 """
-数据采集模块
-模拟相机图像采集和ROI灰度值提取
+数据采集模块（兼容层）
+使用统一架构，委托给 data_sources/ 层
+
+注意: 此模块为向后兼容保留，新项目请直接使用 data_sources/
 """
 
 from typing import Tuple, Optional
 
-import cv2
 import numpy as np
 
-from .config import CameraConfig, LEDConfig, ROIStrategy, ExperimentConfig, DemodulationConfig
-
-
-# ---- 公共 ROI mask 工具函数 (可被任意模块复用) ----
-
-def create_center_roi_mask(image: np.ndarray, roi_size: int = 300) -> np.ndarray:
-    """
-    在图像中心创建 roi_size × roi_size 的 ROI 掩码
-
-    Args:
-        image: 输入图像 (2D 或 3D numpy 数组)
-        roi_size: ROI 边长 (像素)
-
-    Returns:
-        与 image 同尺寸的 uint8 掩码 (ROI=1, 其余=0)
-    """
-    height, width = image.shape[:2]
-    roi_w = min(roi_size, width)
-    roi_h = min(roi_size, height)
-    x = (width - roi_w) // 2
-    y = (height - roi_h) // 2
-    mask = np.zeros((height, width), dtype=np.uint8)
-    mask[y:y + roi_h, x:x + roi_w] = 1
-    return mask
-
-
-def create_auto_roi_mask(image: np.ndarray, roi_size: int = 300) -> np.ndarray:
-    """
-    自动找最亮区域作为 ROI (优先取最亮连通域, 否则取最亮滑窗)
-
-    阈值自适应: 使用图像最大灰度值的 70% 作为阈值, 至少为 10。
-    检测到的区域会被扩展到至少 roi_size × roi_size。
-
-    Args:
-        image: 输入图像 (灰度 2D 或彩色 3D numpy 数组)
-        roi_size: ROI 最小边长 (像素)
-
-    Returns:
-        与 image 同尺寸的 uint8 掩码 (ROI=1, 其余=0)
-    """
-    gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    # 自适应阈值: 取最大灰度值的 70%, 至少为 10
-    adaptive_thresh = max(int(float(gray.max()) * 0.7), 10)
-    _, thresh_img = cv2.threshold(gray, adaptive_thresh, 255, cv2.THRESH_BINARY)
-    contours, _ = cv2.findContours(thresh_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    if contours:
-        max_contour = max(contours, key=cv2.contourArea)
-        x, y, w, h = cv2.boundingRect(max_contour)
-        # 将检测到的区域扩展到至少 roi_size 大小
-        cx, cy = x + w // 2, y + h // 2
-        new_w = max(w, roi_size)
-        new_h = max(h, roi_size)
-        x = max(0, cx - new_w // 2)
-        y = max(0, cy - new_h // 2)
-        new_w = min(gray.shape[1] - x, new_w)
-        new_h = min(gray.shape[0] - y, new_h)
-        mask = np.zeros_like(gray, dtype=np.uint8)
-        mask[y:y + new_h, x:x + new_w] = 1
-        return mask
-
-    # 无明显亮区时退化为滑窗搜索最亮区域
-    h, w = gray.shape
-    roi_w = min(roi_size, w)
-    roi_h = min(roi_size, h)
-    max_mean = -1
-    best_x = 0
-    best_y = 0
-    step = max(roi_size // 4, 10)
-    for sy in range(0, h - roi_h + 1, step):
-        for sx in range(0, w - roi_w + 1, step):
-            window = gray[sy:sy + roi_h, sx:sx + roi_w]
-            mean_val = float(np.mean(window))
-            if mean_val > max_mean:
-                max_mean = mean_val
-                best_x = sx
-                best_y = sy
-    mask = np.zeros_like(gray, dtype=np.uint8)
-    mask[best_y:best_y + roi_h, best_x:best_x + roi_w] = 1
-    return mask
-
-
-def create_sync_based_roi_mask(image: np.ndarray,
-                               demod_config: dict = None) -> np.ndarray:
-    """
-    基于同步头检测创建精确的数据包 ROI 掩码
-
-    使用 OOK 解调器检测条纹码中的同步头位置，
-    返回覆盖完整数据包(同步头之间)的 ROI 掩码。
-
-    Args:
-        image: 输入图像 (BGR 或灰度)
-        demod_config: 可选解调配置字典
-
-    Returns:
-        与 image 同尺寸的 uint8 掩码 (ROI=1, 其余=0)
-    """
-    from .demodulation import OOKDemodulator
-    demodulator = OOKDemodulator(config=demod_config)
-    return demodulator.get_packet_roi_mask(image)
+from .config import CameraConfig, ROIStrategy, ExperimentConfig
+from .data_sources.roi import (
+    create_center_roi_mask,
+    create_auto_roi_mask,
+    create_sync_based_roi_mask,
+    compute_roi_stats,
+)
 
 
 class DataAcquisition:
-    """数据采集类 - 模拟相机图像采集"""
+    """数据采集类 - 兼容层，使用统一架构"""
 
     def __init__(self, width: int = CameraConfig.IMAGE_WIDTH,
                  height: int = CameraConfig.IMAGE_HEIGHT):
@@ -142,6 +49,8 @@ class DataAcquisition:
         Returns:
             捕获的图像 (灰度图)
         """
+        import cv2
+
         image = np.full((self.height, self.width), background_light, dtype=np.float32)
 
         # LED区域 (中心圆形区域)
@@ -172,7 +81,7 @@ class DataAcquisition:
                    image: Optional[np.ndarray] = None,
                    roi_size: int = 300) -> np.ndarray:
         """
-        选择ROI区域
+        选择ROI区域 - 委托给 data_sources.roi
 
         Args:
             strategy: ROI选择策略
@@ -183,8 +92,9 @@ class DataAcquisition:
         Returns:
             ROI掩码
         """
+        import cv2
+
         if strategy == ROIStrategy.CENTER:
-            # 使用一个临时图像占位 (仅需尺寸信息)
             placeholder = np.zeros((self.height, self.width), dtype=np.uint8)
             self.roi_mask = create_center_roi_mask(placeholder, roi_size=roi_size)
 
@@ -230,7 +140,7 @@ class DataAcquisition:
     def get_roi_statistics(self, image: np.ndarray,
                            roi_mask: Optional[np.ndarray] = None) -> dict:
         """
-        获取ROI区域的统计信息
+        获取ROI区域的统计信息 - 委托给 data_sources.roi
 
         Args:
             image: 输入图像
@@ -239,21 +149,11 @@ class DataAcquisition:
         Returns:
             包含统计信息的字典
         """
-        mean_gray, gray_values = self.extract_roi_gray_values(image, roi_mask)
+        if roi_mask is None:
+            # 无掩码时使用整个图像
+            roi_mask = np.ones(image.shape[:2], dtype=np.uint8)
 
-        stats = {
-            'mean': mean_gray,
-            'std': np.std(gray_values),
-            'min': np.min(gray_values),
-            'max': np.max(gray_values),
-            'median': np.median(gray_values),
-            'percentile_25': np.percentile(gray_values, 25),
-            'percentile_75': np.percentile(gray_values, 75),
-            'num_pixels': len(gray_values),
-            'saturated_ratio': np.sum(gray_values >= 255) / len(gray_values)
-        }
-
-        return stats
+        return compute_roi_stats(image, roi_mask)
 
     def simulate_capture_sequence(self, led_duty_cycle: float,
                                   gains: np.ndarray,
@@ -265,7 +165,7 @@ class DataAcquisition:
 
         Args:
             led_duty_cycle: LED占空比 (0-100)
-            gains: 增益值数组
+            gains: 增益值数组 (dB)
             background_light: 背景光强
             noise_std: 噪声标准差
             roi_strategy: ROI选择策略

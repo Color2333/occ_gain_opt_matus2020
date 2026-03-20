@@ -128,21 +128,11 @@ class ClosedLoopExperiment:
         self.n_frames = n_frames
         self.resume = resume
 
-        # 实例化三个算法
-        gain_db_min = 20.0 * np.log10(max(iso_min / 100.0, 1e-9))
-        gain_db_max = 20.0 * np.log10(max(iso_max / 100.0, 1e-9))
+        # 实例化三个算法（使用默认参数）
         self._algos: Dict[str, AlgorithmBase] = {
-            "single_shot": algo_get("single_shot")(
-                target_gray=target_gray, gain_db_min=gain_db_min, gain_db_max=gain_db_max,
-            ),
-            "adaptive_iter": algo_get("adaptive_iter")(
-                alpha=alpha, target_gray=target_gray,
-                gain_db_min=gain_db_min, gain_db_max=gain_db_max,
-            ),
-            "adaptive_damping": algo_get("adaptive_damping")(
-                target_brightness=target_brightness, iso_min=iso_min, iso_max=iso_max,
-                strategy=ma_strategy,
-            ),
+            "single_shot": algo_get("single_shot")(),
+            "adaptive_iter": algo_get("adaptive_iter")(),
+            "adaptive_damping": algo_get("adaptive_damping")(),
         }
         # 各算法当前参数（独立跟踪）
         self._algo_params: Dict[str, CameraParams] = {

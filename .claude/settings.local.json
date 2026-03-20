@@ -16,7 +16,12 @@
       "Bash(git add CLAUDE.md scripts/ber_vs_gain_analysis.py results/ber_analysis/BER_REPORT.md)",
       "Bash(git add CLAUDE.md scripts/ber_vs_gain_analysis.py docs/BER_ANALYSIS.md)",
       "Bash(git push origin main)",
-      "Bash(git add scripts/ber_comparison_plot.py)"
+      "Bash(git add scripts/ber_comparison_plot.py)",
+      "Bash(find /Users/haojiang/Documents/2025/school/uocc/kg -name \"*test - 副本.py\" -o -name \"*test*副本*\" 2>/dev/null | head -20)",
+      "Bash(git rm --cached real/adaptive_experiment.py real/gain_advisor.py real/comm_capture.py \"real/single_demod_all-exp.py\" 2>/dev/null; echo \"done\")",
+      "Bash(cd /Users/haojiang/Documents/2025/school/uocc/kg/src/occ_gain_opt/algorithms && \\\\\ncp matus_single.py   single_shot.py && \\\\\ncp matus_adaptive.py adaptive_iter.py && \\\\\ncp ma_damping.py     adaptive_damping.py && \\\\\necho \"copied\")",
+      "Bash(find \"/Users/haojiang/Documents/2025/school/uocc/kg/real/自适应算法（龚）/\" -type f -name \"*.pptx\" -o -type f -name \"*.docx\" 2>/dev/null | head -20)",
+      "Bash(\\\\\ngit add \\\\\n  CLAUDE.md \\\\\n  docs/ALGORITHM.md \\\\\n  docs/ANALYSIS.md \\\\\n  docs/COMPLETION_REPORT.md \\\\\n  docs/FINAL_RUN_REPORT.md \\\\\n  docs/PROBLEM_SUMMARY.md \\\\\n  docs/PROJECT_SUMMARY.md \\\\\n  docs/WHY_2_ITERATIONS.md \\\\\n  docs/final_comparison.md \\\\\n  pyproject.toml \\\\\n  scripts/ber_vs_gain_analysis.py \\\\\n  scripts/ber_analysis.py \\\\\n  scripts/validate_algorithm_on_real_data.py \\\\\n  scripts/validate_iterative_algorithm.py \\\\\n  scripts/validate_algorithms.py \\\\\n  src/occ_gain_opt/__init__.py \\\\\n  src/occ_gain_opt/cli.py \\\\\n  src/occ_gain_opt/config.py \\\\\n  src/occ_gain_opt/realtime.py \\\\\n  src/occ_gain_opt/algorithms/ \\\\\n  src/occ_gain_opt/data_sources/ \\\\\n  src/occ_gain_opt/experiments/ \\\\\n  src/occ_gain_opt/hardware/ \\\\\n  real/ && \\\\\ngit rm --cached \\\\\n  others/adaptive_experiment.py \\\\\n  others/comm_capture.py \\\\\n  others/demod_debug.png \\\\\n  others/gain_advisor.py \\\\\n  others/new.jpeg \\\\\n  others/single_demod_all-exp.py \\\\\n  \"others/增益62.jpeg\" \\\\\n  \"others/增益75.jpeg\" 2>/dev/null; \\\\\ngit status --short)"
     ]
   }
 }
