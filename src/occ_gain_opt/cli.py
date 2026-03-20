@@ -105,20 +105,142 @@ def quick_test():
               f"{state['mean_gray']:6.2f} | {state['std_gray']:5.2f}")
 
     print("\n✓ 快速测试完成!")
+
+    # 也测试新算法层
+    from .algorithms import list_algorithms, get as algo_get
+    from .config import CameraParams
+    print(f"\n已注册算法: {list_algorithms()}")
+    algo = algo_get("single_shot")()
+    params = CameraParams(iso=35, exposure_us=27.9)
+    next_p = algo.compute_next_params(params, roi_brightness=110.0)
+    print(f"单次公式示例: ISO 35 + 亮度110 → ISO {next_p.iso:.1f} ({next_p.gain_db:+.2f}dB)")
+    print("✓ 算法层测试完成!")
+
     return result
 
 
+# ── advisor 子命令 ──────────────────────────────────────────────────────────────
+
+def cmd_advisor(args) -> None:
+    import numpy as np
+    from PIL import Image as PILImage
+    from .config import CameraParams
+    from .experiments.advisor import run_advisor
+
+    img_pil = PILImage.open(args.image).convert("RGB")
+    import cv2
+    import numpy as _np
+    img = cv2.cvtColor(_np.array(img_pil), cv2.COLOR_RGB2BGR)
+
+    current_params = CameraParams(iso=args.iso, exposure_us=args.exposure)
+    run_advisor(
+        image=img,
+        current_params=current_params,
+        label_csv=args.label_csv,
+        roi_strategy=args.roi,
+        alpha=args.alpha,
+        target_gray=args.target_gray,
+        target_brightness=args.target_brightness,
+        ma_strategy=args.ma_strategy,
+        iso_min=args.iso_min,
+        iso_max=args.iso_max,
+        verbose=True,
+    )
+
+
+# ── experiment 子命令 ──────────────────────────────────────────────────────────
+
+def cmd_experiment(args) -> None:
+    from .config import CameraParams
+    from .experiments.closed_loop import ClosedLoopExperiment
+
+    initial_params = CameraParams(iso=args.initial_iso, exposure_us=args.initial_exposure)
+    exp = ClosedLoopExperiment(
+        rtsp_url=args.rtsp_url,
+        initial_params=initial_params,
+        label_csv=args.label_csv,
+        save_dir=args.save_dir,
+        max_rounds=args.max_rounds,
+        n_frames=args.n_frames,
+        alpha=args.alpha,
+        target_gray=args.target_gray,
+        target_brightness=args.target_brightness,
+        ma_strategy=args.ma_strategy,
+        iso_min=args.iso_min,
+        iso_max=args.iso_max,
+        camera_mode=args.camera_mode,
+        resume=not args.no_resume,
+    )
+    exp.run()
+
+
+# ── 参数解析 ───────────────────────────────────────────────────────────────────
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="OCC 相机增益优化算法复现")
+    parser = argparse.ArgumentParser(
+        description="OCC 相机增益优化算法复现",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--test", action="store_true", help="运行快速测试")
     parser.add_argument("--examples", action="store_true", help="运行示例")
     parser.add_argument("--example-id", type=str, default=None, help="运行指定示例编号(1-6)")
+
+    subparsers = parser.add_subparsers(dest="command", help="子命令")
+
+    # ── advisor 子命令 ──
+    adv = subparsers.add_parser(
+        "advisor",
+        help="单帧多算法参数建议（给定图像 + 当前参数，输出三算法推荐）",
+    )
+    adv.add_argument("--image", required=True, help="输入图像路径")
+    adv.add_argument("--iso", type=float, required=True, help="当前相机 ISO")
+    adv.add_argument("--exposure", type=float, required=True, help="当前曝光时间 (µs)")
+    adv.add_argument("--label-csv", default="results/base_data/Mseq_32_original.csv")
+    adv.add_argument("--roi", default="sync_based", choices=["sync_based", "auto", "center"])
+    adv.add_argument("--alpha", type=float, default=0.5)
+    adv.add_argument("--target-gray", type=float, default=242.25)
+    adv.add_argument("--target-brightness", type=float, default=125.0)
+    adv.add_argument("--ma-strategy", default="exposure_priority",
+                     choices=["exposure_priority", "gain_priority"])
+    adv.add_argument("--iso-min", type=float, default=30.0)
+    adv.add_argument("--iso-max", type=float, default=10000.0)
+
+    # ── experiment 子命令 ──
+    exp = subparsers.add_parser(
+        "experiment",
+        help="三算法闭环对比实验（RTSP 采集 + 参数自动调节）",
+    )
+    exp.add_argument("--rtsp-url", default="none", help="RTSP 流地址（none=手动模式）")
+    exp.add_argument("--initial-iso", type=float, default=35.0)
+    exp.add_argument("--initial-exposure", type=float, default=27.9, help="初始曝光时间 (µs)")
+    exp.add_argument("--label-csv", default="results/base_data/Mseq_32_original.csv")
+    exp.add_argument("--save-dir", default="exp_data/session_001")
+    exp.add_argument("--max-rounds", type=int, default=5)
+    exp.add_argument("--n-frames", type=int, default=50)
+    exp.add_argument("--alpha", type=float, default=0.5)
+    exp.add_argument("--target-gray", type=float, default=242.25)
+    exp.add_argument("--target-brightness", type=float, default=125.0)
+    exp.add_argument("--ma-strategy", default="exposure_priority",
+                     choices=["exposure_priority", "gain_priority"])
+    exp.add_argument("--iso-min", type=float, default=30.0)
+    exp.add_argument("--iso-max", type=float, default=10000.0)
+    exp.add_argument("--camera-mode", default="manual", choices=["manual", "hikvision"])
+    exp.add_argument("--no-resume", action="store_true", help="不从断点恢复，重新开始")
+
     return parser
 
 
 def main():
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.command == "advisor":
+        cmd_advisor(args)
+        return
+
+    if args.command == "experiment":
+        cmd_experiment(args)
+        return
 
     if args.examples:
         if args.example_id:

@@ -1,13 +1,22 @@
 """
 实时增益优化接口
 用于真实实验装置：根据当前帧返回可设置的相机参数，供外部循环「采集 → 设置参数 → 再采集」使用。
+
+新接口（推荐）:
+    from occ_gain_opt.algorithms import get as algo_get
+    from occ_gain_opt.config import CameraParams
+    algo = algo_get("single_shot")()
+    next_params = algo.compute_next_params(current_params, roi_brightness)
+
+旧接口（向后兼容，保留）:
+    compute_next_gain(), RealtimeGainController
 """
 
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-from .config import CameraConfig, OptimizationConfig, ROIStrategy
+from .config import CameraConfig, CameraParams, OptimizationConfig, ROIStrategy
 from .data_acquisition import DataAcquisition
 from .gain_optimization import AdaptiveGainOptimizer, GainOptimizer
 

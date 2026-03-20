@@ -3,6 +3,39 @@
 包含相机、LED和优化算法的所有参数
 """
 
+import math
+from dataclasses import dataclass
+
+
+@dataclass
+class CameraParams:
+    """实验室相机参数（ISO + 曝光时间）"""
+    iso: float          # e.g. 35, 100, 3200
+    exposure_us: float  # 曝光时间（微秒），e.g. 27.9
+
+    @property
+    def gain_db(self) -> float:
+        """ISO → dB  (base ISO = 100)"""
+        return 20.0 * math.log10(max(self.iso / 100.0, 1e-9))
+
+    @property
+    def gain_linear(self) -> float:
+        """ISO → 线性增益  (base ISO = 100)"""
+        return self.iso / 100.0
+
+    @property
+    def exposure_s(self) -> float:
+        """曝光时间（秒）"""
+        return self.exposure_us * 1e-6
+
+    @classmethod
+    def from_gain_db(cls, gain_db: float, exposure_us: float) -> "CameraParams":
+        """从 dB 增益构造 CameraParams"""
+        return cls(iso=100.0 * 10.0 ** (gain_db / 20.0), exposure_us=exposure_us)
+
+    def __str__(self) -> str:
+        return f"CameraParams(ISO={self.iso:.1f}, gain={self.gain_db:+.2f}dB, exp={self.exposure_us:.2f}µs)"
+
 
 class CameraConfig:
     """相机配置参数"""
