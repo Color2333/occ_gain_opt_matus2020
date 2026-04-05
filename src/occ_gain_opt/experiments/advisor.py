@@ -15,6 +15,7 @@
 """
 
 import os
+from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
@@ -113,15 +114,77 @@ def _polyfit_threshold(y, degree=3):
     return np.polyval(coeffs, x)
 
 
+def _load_truth_bits(label_csv_path: str) -> np.ndarray:
+    """
+    加载 BER 对比用的真值比特。
+
+    约定：
+    - `*_original.csv` 直接作为 payload 真值
+    - `*_with_header.csv` 若存在同名 `*_original.csv`，优先回退到 original
+    - 若 original 不存在，则按「3 次重复、每包 8 bit header + payload」退化解析首个 payload
+    """
+    import pandas as pd
+
+    label_path = Path(label_csv_path)
+    df = pd.read_csv(label_path, skiprows=5)
+    bits = df.iloc[:, 1].astype(int).to_numpy()
+
+    if "_with_header" not in label_path.stem:
+        return bits
+
+    original_path = label_path.with_name(label_path.name.replace("_with_header", "_original"))
+    if original_path.is_file():
+        df_original = pd.read_csv(original_path, skiprows=5)
+        return df_original.iloc[:, 1].astype(int).to_numpy()
+
+    # 退化处理：生成脚本固定为 (8 bit header + payload) * 3
+    if len(bits) % 3 == 0:
+        unit = bits[: len(bits) // 3]
+        if len(unit) > 8:
+            return unit[8:]
+
+    return bits
+
+
+def _infer_sync_head_len(label_csv_path: str) -> int:
+    """
+    从 with_header CSV 的首包中推断同步头长度（连续 1 的数量）。
+    若无法推断，则退回默认 8。
+    """
+    import pandas as pd
+
+    label_path = Path(label_csv_path)
+    if "_with_header" not in label_path.stem:
+        return 8
+
+    df = pd.read_csv(label_path, skiprows=5)
+    bits = df.iloc[:, 1].astype(int).to_numpy()
+    if len(bits) < 3:
+        return 8
+
+    unit = bits[: len(bits) // 3] if len(bits) % 3 == 0 else bits
+    run = 0
+    started = False
+    for bit in unit:
+        if not started:
+            if bit == 0:
+                started = True
+            continue
+        if bit == 1:
+            run += 1
+        else:
+            break
+
+    return run if run > 0 else 8
+
+
 def compute_ber(image: np.ndarray, label_csv_path: str) -> Tuple[float, int, int]:
     """
     对单帧图像进行 OOK 解调，返回 (ber, n_errors, n_bits)。
     失败时抛出异常。
     """
-    import pandas as pd
-
-    df = pd.read_csv(label_csv_path, skiprows=5)
-    tx_bits = df.iloc[:, 1].to_numpy()
+    tx_bits = _load_truth_bits(label_csv_path)
+    sync_head_len = _infer_sync_head_len(label_csv_path)
 
     img = image.astype(np.float64) if image.ndim == 2 else \
           __import__('cv2').cvtColor(image, __import__('cv2').COLOR_BGR2GRAY).astype(np.float64)
@@ -135,7 +198,7 @@ def compute_ber(image: np.ndarray, label_csv_path: str) -> Tuple[float, int, int
     threshold = _polyfit_threshold(y, degree=3)
     rr = (y - threshold > 0).astype(int)
 
-    equ, payload_start = _find_sync(rr)
+    equ, payload_start = _find_sync(rr, head_len=sync_head_len)
     rx = _recover_data(rr, payload_start, equ)
     n = min(len(tx_bits), len(rx))
     if n == 0:
