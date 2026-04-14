@@ -22,6 +22,7 @@ import numpy as np
 
 from ..config import CameraParams, ROIStrategy
 from ..algorithms import get as algo_get
+from ..demodulation import OOKDemodulator
 from ..data_sources.roi import (
     create_center_roi_mask,
     create_auto_roi_mask,
@@ -31,6 +32,7 @@ from ..data_sources.roi import (
 
 
 # ── ROI 亮度提取 ───────────────────────────────────────────────────────────────
+
 
 def get_roi_brightness(
     image: np.ndarray,
@@ -64,55 +66,6 @@ def get_roi_brightness(
 
 # ── BER 解调 ──────────────────────────────────────────────────────────────────
 
-def _find_sync(rr, head_len=8, max_head_len=100, max_len_diff=5):
-    runs = []
-    p = 0
-    while p < len(rr):
-        if rr[p] == 1:
-            q = p
-            while q < len(rr) and rr[q] == 1:
-                q += 1
-            length = q - p
-            if head_len <= length <= max_head_len:
-                runs.append((p, q - 1, length))
-            p = q
-        else:
-            p += 1
-    if not runs:
-        raise ValueError("未检测到同步头")
-    runs_sorted = sorted(runs, key=lambda x: x[2], reverse=True)
-    h1_s, h1_e, len1 = runs_sorted[0]
-    h2_s = h2_e = len2 = None
-    for run in runs_sorted[1:]:
-        if abs(run[2] - len1) <= max_len_diff:
-            h2_s, h2_e, len2 = run
-            break
-    if h2_s is not None:
-        payload_start = min(h1_e, h2_e) + 1
-        equ = int(round(abs((len1 + len2) / (head_len * 2))))
-    else:
-        payload_start = h1_e + 1
-        equ = int(round(len1 / head_len))
-    return equ, payload_start
-
-
-def _recover_data(rr, payload_start, equ_len):
-    p = payload_start
-    res = []
-    for i in range(payload_start, len(rr) - 1):
-        if rr[i + 1] != rr[i]:
-            width = (i + 1) - p
-            cnt = int(round(width / equ_len))
-            res.extend([rr[i]] * cnt)
-            p = i + 1
-    return np.array(res)
-
-
-def _polyfit_threshold(y, degree=3):
-    x = np.arange(1, len(y) + 1)
-    coeffs = np.polyfit(x, y, degree)
-    return np.polyval(coeffs, x)
-
 
 def _load_truth_bits(label_csv_path: str) -> np.ndarray:
     """
@@ -132,7 +85,9 @@ def _load_truth_bits(label_csv_path: str) -> np.ndarray:
     if "_with_header" not in label_path.stem:
         return bits
 
-    original_path = label_path.with_name(label_path.name.replace("_with_header", "_original"))
+    original_path = label_path.with_name(
+        label_path.name.replace("_with_header", "_original")
+    )
     if original_path.is_file():
         df_original = pd.read_csv(original_path, skiprows=5)
         return df_original.iloc[:, 1].astype(int).to_numpy()
@@ -184,32 +139,28 @@ def compute_ber(image: np.ndarray, label_csv_path: str) -> Tuple[float, int, int
     失败时抛出异常。
     """
     tx_bits = _load_truth_bits(label_csv_path)
-    sync_head_len = _infer_sync_head_len(label_csv_path)
+    import cv2
 
-    img = image.astype(np.float64) if image.ndim == 2 else \
-          __import__('cv2').cvtColor(image, __import__('cv2').COLOR_BGR2GRAY).astype(np.float64)
+    if image.ndim == 3:
+        gray_img = image
+    else:
+        gray_img = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
 
-    column = np.mean(img, axis=1)
-    mean = np.mean(column)
-    std = np.std(column)
-    if std < 1e-6:
-        raise ValueError("图像行均值方差为零，无法解调")
-    y = (column - mean) / std
-    threshold = _polyfit_threshold(y, degree=3)
-    rr = (y - threshold > 0).astype(int)
+    result = OOKDemodulator().demodulate(gray_img)
+    if not result.packets:
+        raise ValueError("No packets detected")
 
-    equ, payload_start = _find_sync(rr, head_len=sync_head_len)
-    rx = _recover_data(rr, payload_start, equ)
-    n = min(len(tx_bits), len(rx))
+    pkt = result.packets[0].astype(int)
+    n = min(len(tx_bits), len(pkt))
     if n == 0:
-        raise ValueError("恢复数据长度为零")
-    rx = rx[1:n + 1]
-    n = min(len(tx_bits), len(rx))
-    n_errors = int(np.sum(tx_bits[:n] != rx[:n]))
+        raise ValueError("Empty packet")
+
+    n_errors = int(np.sum(tx_bits[:n] != pkt[:n]))
     return n_errors / n, n_errors, n
 
 
 # ── 主函数 ─────────────────────────────────────────────────────────────────────
+
 
 def run_advisor(
     image: np.ndarray,
@@ -285,8 +236,19 @@ def run_advisor(
     next3 = algo3.compute_next_params(current_params, mean_gray)
 
     if verbose:
-        _print_table(current_params, mean_gray, roi_method, ber,
-                     next1, next2, next3, alpha, target_gray, target_brightness, ma_strategy)
+        _print_table(
+            current_params,
+            mean_gray,
+            roi_method,
+            ber,
+            next1,
+            next2,
+            next3,
+            alpha,
+            target_gray,
+            target_brightness,
+            ma_strategy,
+        )
 
     return {
         "mean_gray": mean_gray,
@@ -298,8 +260,19 @@ def run_advisor(
     }
 
 
-def _print_table(current, mean_gray, roi_method, ber,
-                 next1, next2, next3, alpha, target_gray, target_brightness, ma_strategy):
+def _print_table(
+    current,
+    mean_gray,
+    roi_method,
+    ber,
+    next1,
+    next2,
+    next3,
+    alpha,
+    target_gray,
+    target_brightness,
+    ma_strategy,
+):
     SEP = "─" * 62
     print(f"\n{SEP}")
     print("  推荐参数 (下一次拍摄请设置)")
@@ -316,8 +289,14 @@ def _print_table(current, mean_gray, roi_method, ber,
     print(f"  {'算法':<28} {'ISO':>7} {'增益(dB)':>9} {'曝光':>12}  收敛?")
     print(SEP)
     exp_str = fmt_exp(current.exposure_us) + " (不变)"
-    print(f"  {'1. 单次公式':<28} {next1.iso:>7.1f} {next1.gain_db:>+9.2f} {exp_str:>12}  {'是' if converged_matus else '否'}")
-    print(f"  {'2. 自适应迭代 α=' + str(alpha):<28} {next2.iso:>7.1f} {next2.gain_db:>+9.2f} {exp_str:>12}  {'是' if converged_matus else '否'}")
+    print(
+        f"  {'1. 单次公式':<28} {next1.iso:>7.1f} {next1.gain_db:>+9.2f} {exp_str:>12}  {'是' if converged_matus else '否'}"
+    )
+    print(
+        f"  {'2. 自适应迭代 α=' + str(alpha):<28} {next2.iso:>7.1f} {next2.gain_db:>+9.2f} {exp_str:>12}  {'是' if converged_matus else '否'}"
+    )
     damp_label = f"3. 自适应阻尼 ({ma_strategy[:3]})"
-    print(f"  {damp_label:<28} {next3.iso:>7.1f} {'(线性)':>9} {fmt_exp(next3.exposure_us):>12}  {'是' if converged_ma else '否'}")
+    print(
+        f"  {damp_label:<28} {next3.iso:>7.1f} {'(线性)':>9} {fmt_exp(next3.exposure_us):>12}  {'是' if converged_ma else '否'}"
+    )
     print(SEP)

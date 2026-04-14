@@ -1,200 +1,113 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Project: OCC (Optical Camera Communications) analog gain optimization.
+Reproduction of Matus et al. 2020 + Ma 2024 adaptive damping.
 
-## Project Purpose
+## Architecture
 
-Reproduction of the paper *"Experimental Evaluation of an Analog Gain Optimization Algorithm in Optical Camera Communications"* (Matus et al., 2020). The goal is to automatically optimize camera analog gain in OCC systems so ROI grayscale values approach 255 (saturation) without exceeding it.
-
-The codebase also implements Ma (2024) adaptive damping algorithm and provides a pluggable multi-algorithm framework for real-hardware experiments.
-
-## Setup
-
-```bash
-pip install -r requirements.txt
-pip install -e .
+```
+src/occ_gain_opt/
+├── config.py              CameraParams, DemodulationConfig, all shared types
+├── demodulation.py        OOKDemodulator — THE ONLY demodulation entry point
+├── experiment_loader.py   ExperimentLoader — loads ISO-Texp/ images
+├── algorithms/            Pluggable gain optimization algorithms
+│   ├── base.py            AlgorithmBase ABC
+│   ├── single_shot.py     Matus Eq.7 single-shot
+│   ├── adaptive_iter.py   Matus iterative with learning rate
+│   ├── adaptive_damping.py Ma 5-state adaptive damping
+│   └── ber_explore.py     BER-guided exploration
+├── data_sources/          Data source abstraction + ROI strategies
+├── experiments/           High-level experiment wrappers
+├── hardware/              Hikvision ISAPI camera controller
+├── cli.py                 occ-gain-opt CLI entry point
+├── realtime.py            Single-step real-hardware interface
+├── simulation.py          ExperimentSimulation
+└── visualization.py       ResultVisualizer
 ```
 
-## Commands
-
-```bash
-# Quick sanity test (simulation + algorithm layer)
-occ-gain-opt --test
-
-# Run built-in examples
-occ-gain-opt --examples
-occ-gain-opt --example-id 1
-
-# Single-frame multi-algorithm advisor
-occ-gain-opt advisor --image real/new.jpeg --iso 35 --exposure 27.9
-
-# Three-algorithm closed-loop experiment (manual camera mode)
-occ-gain-opt experiment --rtsp-url none --max-rounds 3
-
-# Full reproducibility workflow (run in order)
-python scripts/demo_demodulation.py        # OOK demodulation & sync head detection
-python scripts/validate_algorithms.py      # All algorithms on real dataset
-python scripts/ber_comparison_plot.py      # BER comparison visualization
-```
-
-## Architecture (Unified)
-
-The package lives in `src/occ_gain_opt/`. All code now uses the unified architecture:
-
-### Core modules
-| Module | Role |
-|--------|------|
-| `config.py` | `CameraParams` (ISO + exposure), `CameraConfig`, `LEDConfig`, `ROIStrategy`, `OptimizationConfig`, `DemodulationConfig` |
-| `demodulation.py` | `OOKDemodulator` — full pipeline: LED column detection → row-mean → binarize → sync-head detection → bit sampling → packet ROI extraction |
-| `performance_evaluation.py` | `PerformanceEvaluator` — MSE, PSNR, SSIM, SNR metrics |
-| `experiment_loader.py` | `ExperimentLoader` — reads the `ISO-Texp/` real image dataset |
-
-### Algorithm layer (`algorithms/`)
-| Module | Role |
-|--------|------|
-| `algorithms/base.py` | `AlgorithmBase` ABC — `compute_next_params(CameraParams, brightness, ber)` |
-| `algorithms/__init__.py` | `REGISTRY`, `register()`, `get(name)`, `list_algorithms()` |
-| `algorithms/single_shot.py` | `SingleShotAlgorithm` (name="single_shot") — Paper Eq. 7 |
-| `algorithms/adaptive_iter.py` | `AdaptiveIterAlgorithm` (name="adaptive_iter") — Iterative with learning rate |
-| `algorithms/adaptive_damping.py` | `AdaptiveDampingAlgorithm` (name="adaptive_damping") — Ma 5-state machine |
-| `algorithms/ber_explore.py` | `BerExploreAlgorithm` (name="ber_explore") — BER-guided exploration |
-
-### Data source layer (`data_sources/`)
-| Module | Role |
-|--------|------|
-| `data_sources/base.py` | `DataSource` ABC — `get_frame()`, `current_params`, `set_params()` |
-| `data_sources/roi.py` | ROI utilities: `create_center_roi_mask`, `create_auto_roi_mask`, `create_sync_based_roi_mask`, `compute_roi_stats` |
-| `data_sources/simulated.py` | `SimulatedDataSource` — simulation environment |
-| `data_sources/dataset.py` | `DatasetDataSource` — wraps ExperimentLoader, selects nearest-ISO image |
-| `data_sources/camera.py` | `CameraDataSource` — RTSP camera interface |
-
-### Hardware layer (`hardware/`)
-| Module | Role |
-|--------|------|
-| `hardware/camera_controller.py` | `CameraController` — manual prompt + Hikvision ISAPI |
-
-### Experiments layer (`experiments/`)
-| Module | Role |
-|--------|------|
-| `experiments/advisor.py` | `run_advisor()` — single-frame three-algorithm advisor |
-| `experiments/closed_loop.py` | `ClosedLoopExperiment` — three-algorithm round-robin experiment |
-| `experiments/batch_demod.py` | `batch_demodulate()` — batch OOK demodulation |
-
-### Other modules
-| Module | Role |
-|--------|------|
-| `simulation.py` | `ExperimentSimulation` — scenario runs using unified architecture |
-| `visualization.py` | `ResultVisualizer` — Matplotlib plots |
-| `realtime.py` | `compute_next_gain()`, `RealtimeGainController` — single-step real-hardware interface |
-| `examples.py` | Six standalone usage examples using unified architecture |
-| `cli.py` | `main()` entry point + `advisor`/`experiment` subcommands |
-| `data_acquisition.py` | Compatibility layer — delegates to `data_sources/` |
-
-## Algorithm API (preferred for real hardware)
+## Demodulation — Single Entry Point
 
 ```python
-from occ_gain_opt.algorithms import get as algo_get, list_algorithms
+from occ_gain_opt.demodulation import OOKDemodulator
+
+demod = OOKDemodulator()
+result = demod.demodulate(bgr_image)
+result.packets[0]           # np.ndarray, 32-bit data
+result.bit_period           # ~12 rows/bit
+result.sync_positions_row   # sync header row positions
+result.roi_mask             # data packet region mask
+result.confidence           # 1.0 = two syncs found
+```
+
+NEVER duplicate demodulation logic inline. All scripts must use OOKDemodulator.
+
+## Packet Structure
+
+- Header: `[0, 1, 1, 1, 1, 1, 1, 0]` (8 bits, 6 consecutive bright rows)
+- Data: 32-bit PRBS (Mseq)
+- Repeat: 3× per image → 120 bits total
+- Gap between sync headers = 34 bits (trailing 0 + 32 data + leading 0)
+
+## Algorithm API
+
+```python
+from occ_gain_opt.algorithms import get as algo_get
 from occ_gain_opt.config import CameraParams
 
-# List registered algorithms
-print(list_algorithms())  # ['single_shot', 'adaptive_iter', 'adaptive_damping', 'ber_explore']
-
-# Single-shot
 algo = algo_get("single_shot")()
 next_params = algo.compute_next_params(
     CameraParams(iso=35, exposure_us=27.9),
     roi_brightness=110.0
 )
-print(next_params)  # CameraParams(ISO=77.1, ...)
-
-# Adaptive (stateful across calls)
-algo = algo_get("adaptive_damping")()
-for brightness in measured_brightnesses:
-    params = algo.compute_next_params(current_params, brightness)
-    current_params = params
 ```
 
-## Data Source API
+Registered algorithms: `single_shot`, `adaptive_iter`, `adaptive_damping`, `ber_explore`
 
-```python
-from occ_gain_opt.data_sources import SimulatedDataSource, DatasetDataSource
-from occ_gain_opt.data_sources import create_center_roi_mask, compute_roi_stats
-from occ_gain_opt.config import CameraParams
-
-# Simulation
-data_source = SimulatedDataSource()
-data_source.set_params(CameraParams(iso=200, exposure_us=27.9))
-frame = data_source.get_frame()
-
-# ROI processing
-roi_mask = create_center_roi_mask(frame, roi_size=300)
-stats = compute_roi_stats(frame, roi_mask)
-print(f"ROI brightness: {stats['mean']:.1f}")
-```
-
-## CameraParams
-
-```python
-from occ_gain_opt.config import CameraParams
-
-p = CameraParams(iso=35, exposure_us=27.9)
-p.gain_db       # -9.12 dB (20·log10(iso/100))
-p.gain_linear   # 0.35
-p.exposure_s    # 2.79e-5 s
-
-# From dB
-p2 = CameraParams.from_gain_db(-9.12, 27.9)
-```
-
-## Core Algorithms
-
-**Single-shot** (Paper eq. 7):
-```
-G_opt(dB) = G_curr(dB) + 20·log10(Y_target / Y_curr)
-```
-
-**Iterative** (learning rate α, recommended 0.3–0.7):
-```
-G_{k+1} = G_k + α × 20·log10(Y_target / Y_k)
-```
-
-**Ma 5-state adaptive damping** (exposure + ISO, state I–V):
-- State I:   initialization normalization
-- State II:  proportional fast convergence
-- State III: local linear fitting
-- State IV:  gain unidirectional convergence
-- State V:   gain clamping convergence
-
-Target grayscale (Matus): `Y_target = 255 × 0.95 = 242.25`. Convergence typically in 1–4 iterations.
-Target brightness (Ma): 125 (midpoint 0–255).
-
-## ROI Strategies
-
-The preferred strategy for validation is `SYNC_BASED`, which uses OOK sync-head detection to locate the exact data-packet stripe region. If sync detection fails, scripts automatically fall back to `AUTO_BRIGHTNESS`.
-
-Protocol: OOK modulation, sync head = 8 consecutive 1-bits, data = 32-bit sequence (p32), bit period ≈ 12.5 rows/bit.
-
-## ISO ↔ dB Conversion
+## Key Conversions
 
 ```
 gain_dB = 20·log10(ISO/100)
-ISO 30  = -10.46 dB  (camera minimum)
-ISO 100 =   0.00 dB  (base)
-ISO 35  =  -9.12 dB  (typical lab starting point)
+ISO 35  = -9.12 dB (typical starting point)
+ISO 100 =  0.00 dB (base)
 ```
 
-## Real Dataset
+Target grayscale: 242.25 (255 × 0.95)
 
-`ISO-Texp/` contains 234 real experimental images across three conditions (bubble, tap water, turbidity), each with ISO and exposure-time sub-experiments. This directory is `.gitignore`d.
+## Ground Truth
 
-## Reference Files
+- `data/Mseq_32_original.csv` — 32-bit PRBS payload truth
+- `data/Mseq_32_with_header.csv` — (header + payload) × 3
 
-- `real/自适应阻尼算法（马）/test - 副本.py` — Ma algorithm original implementation (reference, do not delete)
-- `real/data/` — captured frames
-- `real/*.jpeg` — test images
+## Dataset
 
-## Output Directories
+`ISO-Texp/` — 234 real experimental images across:
+- `bubble/ISO/` (72), `bubble/Texp/` (42)
+- `tap water/ISO/` (42), `tap water/Texp/` (24)
+- `turbidity/ISO/` (18), `turbidity/Texp/` (36)
 
-Results are written to `results/` (also gitignored):
-- `results/demodulation/` — sync-head visualization panels
-- `results/algorithm_validation/` — algorithm validation reports
+Filename format: `{exposure}_{iso}_p32_{condition}_{index}.jpg`
+Example: `52600_640_p32_bubble_1_4_1.jpg` → exposure=1/52600s, ISO=640, PRBS-32
+
+## Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `demo_demodulation.py` | OOK demodulation visual demo |
+| `batch_demodulate.py` | Batch demod + BER + CSV + plots |
+| `ber_analysis.py` | BER vs gain curves |
+| `ber_comparison_plot.py` | BER comparison visualization |
+| `validate_algorithms.py` | Three-algorithm validation |
+
+## Coding Rules
+
+- Demodulation: always use `OOKDemodulator`, never inline `_find_sync`/`_recover_data`/`polyfit_threshold`
+- Camera params: always use `CameraParams` dataclass, never raw ISO/dB tuples
+- ROI: prefer `sync_based` strategy, fallback to `auto_brightness`
+- Imports: `sys.path.insert(0, "src")` in scripts, relative imports in package
+
+## External References
+
+- `real/自适应阻尼算法（马）/` — Ma algorithm reference implementation (do not delete)
+- `example/` — MATLAB reference code (Rx_1.m, receive.m)
+- `camera_isapi.py` — Hikvision ISAPI camera controller
+- `realtime_experiment_app.py` — Streamlit experiment UI
